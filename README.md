@@ -1,0 +1,58 @@
+# Caso C - Agent-to-Agent (.NET 8, Responses API)
+
+Console App de ejemplo para Azure AI Foundry que implementa:
+- Reutilizar `OrderAgent` existente con `ORDER_AGENT_ID` (no se recrea).
+- Crear `PolicyAgent` dinámicamente.
+- Crear `PlannerAgent` dinámicamente con tools tipo `agent` (Agent-to-Agent).
+- Ejecutar prompt de prueba con polling hasta estado terminal y mostrar respuesta final.
+
+## Requisitos
+
+- .NET SDK 8+
+- Endpoint de **Azure AI Foundry Project** (no AOAI clásico)
+- Permisos para crear agentes en el proyecto
+
+## Variables de entorno
+
+En PowerShell:
+
+```powershell
+$env:AZURE_OPENAI_ENDPOINT="https://<resource>.services.ai.azure.com/api/projects/<project>"
+$env:AZURE_OPENAI_DEPLOYMENT="<deployment-name>"
+$env:ORDER_AGENT_ID="<existing-order-agent-id>"
+```
+
+## Ejecutar
+
+```powershell
+dotnet run
+```
+
+## Flujo de prueba incluido
+
+El programa envía automáticamente:
+
+```text
+Dame el estado de la orden ORD-000001 y dime si requiere acción.
+```
+
+## Salida esperada (ejemplo)
+
+```text
+Inicializando clientes...
+PolicyAgent creado => Id: agt_abc123, Name: policy-agent-casec-20260224174530, Version: 1
+PlannerAgent creado => Id: agt_def456, Name: planner-agent-casec-20260224174533, Version: 1
+Enviando prompt al PlannerAgent 'planner-agent-casec-20260224174533'...
+Response creada: resp_789xyz, estado inicial: queued
+Polling response resp_789xyz... estado: in_progress
+
+===== RESPUESTA FINAL DEL PLANNER =====
+La orden ORD-000001 está en estado "En revisión" y sí requiere acción: validar el pago pendiente antes del despacho.
+=======================================
+```
+
+## Notas
+
+- No usa `Azure.AI.Agents.Persistent` ni `PersistentAgentsClient`.
+- No usa OpenAPI tools.
+- Implementa fallback de compatibilidad de schema de tool (`agent_id` -> `agent_name`) si el primer intento devuelve HTTP 400.
