@@ -1,9 +1,10 @@
-﻿using Azure;
+using Azure;
 using Azure.AI.Projects;
 using Azure.AI.Projects.OpenAI;
 using Azure.Identity;
 using CasoC.Agents;
 using CasoC.Services;
+using Microsoft.Extensions.Configuration;
 using System.ClientModel;
 
 namespace CasoC;
@@ -11,6 +12,38 @@ namespace CasoC;
 internal static class Program
 {
     private const string TestPrompt = "Dame el estado de la orden ORD-000001 y dime si requiere acción.";
+    private const string OrderAgentPromptTemplate =
+        """
+        Extrae y devuelve solo los datos relevantes para resolver esta solicitud.
+        Si faltan datos, indícalo explícitamente.
+
+        Solicitud del usuario:
+        {0}
+        """;
+    private const string PolicyAgentPromptTemplate =
+        """
+        Evalúa la siguiente información de la orden y determina si requiere acción.
+        Responde de forma clara y profesional sin agregar información nueva.
+
+        Solicitud original:
+        {0}
+
+        Datos de la orden:
+        {1}
+        """;
+    private const string PlannerPromptTemplate =
+        """
+        Genera la respuesta final para el usuario usando exclusivamente el contexto disponible.
+
+        Solicitud original:
+        {0}
+
+        Datos obtenidos de la orden:
+        {1}
+
+        Evaluación de política:
+        {2}
+        """;
 
     public static async Task Main()
     {
@@ -23,54 +56,74 @@ internal static class Program
 
         try
         {
-            string endpoint = GetRequiredEnv("AZURE_OPENAI_ENDPOINT");
-            string deployment = GetRequiredEnv("AZURE_OPENAI_DEPLOYMENT");
-            string orderAgentId = GetRequiredEnv("ORDER_AGENT_ID");
-            int timeoutSeconds = GetOptionalPositiveInt("RESPONSES_TIMEOUT_SECONDS", 60);
-            int maxBackoffSeconds = GetOptionalPositiveInt("RESPONSES_MAX_BACKOFF_SECONDS", 8);
+            CasoCSettings settings = LoadSettings();
+            string endpoint = GetRequiredSetting(settings.AzureOpenAiEndpoint, "CasoC:AzureOpenAiEndpoint");
+            string deployment = GetRequiredSetting(settings.AzureOpenAiDeployment, "CasoC:AzureOpenAiDeployment");
+            string orderAgentId = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
+            // Nueva: valor opcional para escoger versión. Si es null/empty/"latest" -> usar la última.
+            string? orderAgentVersionSetting = settings.OrderAgentVersion;
+            int timeoutSeconds = GetPositiveSetting(settings.ResponsesTimeoutSeconds, "CasoC:ResponsesTimeoutSeconds");
+            int maxBackoffSeconds = GetPositiveSetting(settings.ResponsesMaxBackoffSeconds, "CasoC:ResponsesMaxBackoffSeconds");
 
             ValidateProjectEndpoint(endpoint);
 
             Console.WriteLine("Inicializando clientes...");
-            AIProjectClient projectClient = new(new Uri(endpoint), new DefaultAzureCredential());
+            AIProjectClient projectClient = new(new Uri(endpoint), new AzureCliCredential());
             ProjectOpenAIClient openAiClient = projectClient.OpenAI;
 
             await ValidateIdentityCanAccessProjectAsync(projectClient, cts.Token);
             await ValidateOrderAgentIdStrictAsync(projectClient, orderAgentId, cts.Token);
-            Console.WriteLine($"ORDER_AGENT_ID validated: {orderAgentId}");
+            Console.WriteLine($"OrderAgentId validado: {orderAgentId}");
 
-            AgentToolFactory toolFactory = new();
-            PolicyAgentFactory policyFactory = new();
-            PlannerAgentFactory plannerFactory = new(toolFactory);
             AgentReconciler reconciler = new(projectClient);
             AgentRunner runner = new(TimeSpan.FromSeconds(maxBackoffSeconds));
 
             ReconcileResult policyResult = await reconciler.ReconcileAsync(
                 PolicyAgentFactory.AgentName,
-                policyFactory.Build(deployment),
+                PolicyAgentFactory.Build(deployment),
                 cts.Token);
 
             PrintReconciliationResult("PolicyAgent", policyResult);
 
-            PromptAgentDefinition plannerDefinition = plannerFactory.Build(
-                deployment,
-                orderAgentId,
-                policyResult.Version.Id);
-
-            Console.WriteLine($"Tool binding: order_agent -> {orderAgentId}");
-            Console.WriteLine($"Tool binding: policy_agent -> {policyResult.Version.Id}");
-
             ReconcileResult plannerResult = await reconciler.ReconcileAsync(
                 PlannerAgentFactory.AgentName,
-                plannerDefinition,
+                PlannerAgentFactory.Build(deployment),
                 cts.Token);
 
             PrintReconciliationResult("PlannerAgent", plannerResult);
 
+            // Resuelve la versión del OrderAgent a usar (nombre de versión que consume Responses).
+            string orderAgentResponseName = await ResolveOrderAgentVersionAsync(projectClient, orderAgentId, orderAgentVersionSetting, cts.Token);
+            Console.WriteLine($"Usando OrderAgent (response client name): {orderAgentResponseName}"); 
+
+            string orderContext = await runner.RunPromptAsync(
+                openAiClient,
+                orderAgentResponseName,
+                string.Format(OrderAgentPromptTemplate, TestPrompt),
+                TimeSpan.FromSeconds(timeoutSeconds),
+                cts.Token);
+
+            Console.WriteLine();
+            Console.WriteLine("===== CONTEXTO DEL ORDER AGENT =====");
+            Console.WriteLine(orderContext);
+            Console.WriteLine("====================================");
+
+            string policyResultText = await runner.RunPromptAsync(
+                openAiClient,
+                policyResult.Version.Name,
+                string.Format(PolicyAgentPromptTemplate, TestPrompt, orderContext),
+                TimeSpan.FromSeconds(timeoutSeconds),
+                cts.Token);
+
+            Console.WriteLine();
+            Console.WriteLine("===== EVALUACION DEL POLICY AGENT =====");
+            Console.WriteLine(policyResultText);
+            Console.WriteLine("=======================================");
+
             string finalText = await runner.RunPromptAsync(
                 openAiClient,
                 plannerResult.Version.Name,
-                TestPrompt,
+                string.Format(PlannerPromptTemplate, TestPrompt, orderContext, policyResultText),
                 TimeSpan.FromSeconds(timeoutSeconds),
                 cts.Token);
 
@@ -130,7 +183,7 @@ internal static class Program
         catch (ClientResultException ex) when (ex.Status == 404)
         {
             throw new InvalidOperationException(
-                $"ORDER_AGENT_ID '{orderAgentId}' no existe en el proyecto o no es accesible.",
+                $"La configuración 'CasoC:OrderAgentId' con valor '{orderAgentId}' no existe en el proyecto o no es accesible.",
                 ex);
         }
     }
@@ -145,28 +198,83 @@ internal static class Program
         }
     }
 
-    private static string GetRequiredEnv(string name)
+    // Nueva: resuelve el nombre de versión (Version.Name) para usar con ProjectResponsesClient.
+    private static async Task<string> ResolveOrderAgentVersionAsync(
+        AIProjectClient projectClient,
+        string agentNameOrId,
+        string? versionSetting,
+        CancellationToken cancellationToken)
     {
-        string? value = Environment.GetEnvironmentVariable(name);
+        // Si no se especifica versión o está marcada como "latest", devolver la versión más reciente.
+        if (string.IsNullOrWhiteSpace(versionSetting) ||
+            string.Equals(versionSetting, "latest", StringComparison.OrdinalIgnoreCase))
+        {
+            await foreach (AgentVersion version in projectClient.Agents.GetAgentVersionsAsync(
+                               agentName: agentNameOrId,
+                               limit: 1,
+                               order: AgentListOrder.Descending,
+                               cancellationToken: cancellationToken))
+            {
+                return version.Name;
+            }
+
+            throw new InvalidOperationException($"No se encontró ninguna versión para el agente '{agentNameOrId}'.");
+        }
+
+        // Si el usuario indicó una cadena concreta, buscar una versión que coincida por Name, Id o Version.
+        await foreach (AgentVersion version in projectClient.Agents.GetAgentVersionsAsync(
+                           agentName: agentNameOrId,
+                           cancellationToken: cancellationToken))
+        {
+            if (string.Equals(version.Name, versionSetting, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(version.Id, versionSetting, StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(version.Version, versionSetting, StringComparison.OrdinalIgnoreCase))
+            {
+                return version.Name;
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"No se encontró la versión '{versionSetting}' para el agente '{agentNameOrId}'. Use 'latest' o deje vacío para la versión más reciente.");
+    }
+
+    private static CasoCSettings LoadSettings()
+    {
+        IConfiguration configuration = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+            .Build();
+
+        CasoCSettings? settings = configuration
+            .GetSection(CasoCSettings.SectionName)
+            .Get<CasoCSettings>();
+
+        if (settings is null)
+        {
+            throw new InvalidOperationException(
+                $"No se encontró la sección '{CasoCSettings.SectionName}' en appsettings.json.");
+        }
+
+        return settings;
+    }
+
+    private static string GetRequiredSetting(string? value, string key)
+    {
         if (string.IsNullOrWhiteSpace(value))
         {
-            throw new InvalidOperationException($"Missing environment variable '{name}'.");
+            throw new InvalidOperationException(
+                $"La clave requerida '{key}' no está configurada en appsettings.json.");
         }
 
         return value;
     }
 
-    private static int GetOptionalPositiveInt(string name, int defaultValue)
+    private static int GetPositiveSetting(int value, string key)
     {
-        string? rawValue = Environment.GetEnvironmentVariable(name);
-        if (string.IsNullOrWhiteSpace(rawValue))
+        if (value <= 0)
         {
-            return defaultValue;
-        }
-
-        if (!int.TryParse(rawValue, out int value) || value <= 0)
-        {
-            throw new InvalidOperationException($"Environment variable '{name}' must be a positive integer.");
+            throw new InvalidOperationException(
+                $"La clave '{key}' en appsettings.json debe ser un entero positivo.");
         }
 
         return value;
@@ -177,7 +285,7 @@ internal static class Program
         if (!endpoint.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "AZURE_OPENAI_ENDPOINT must be an Azure AI Foundry project endpoint, for example: " +
+                "La clave 'CasoC:AzureOpenAiEndpoint' debe ser un endpoint de proyecto Azure AI Foundry, por ejemplo: " +
                 "https://<resource>.services.ai.azure.com/api/projects/<project>.");
         }
     }
@@ -187,7 +295,7 @@ internal static class Program
         if (message.Contains("api/projects", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("endpoint", StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine("Hint: AZURE_OPENAI_ENDPOINT debe ser endpoint de proyecto Foundry: https://<resource>.services.ai.azure.com/api/projects/<project>");
+            Console.Error.WriteLine("Hint: configura 'CasoC:AzureOpenAiEndpoint' con un endpoint de proyecto Foundry: https://<resource>.services.ai.azure.com/api/projects/<project>");
         }
     }
 
@@ -202,7 +310,7 @@ internal static class Program
 
         if (ex.Status == 404)
         {
-            Console.Error.WriteLine("Hint: resource not found. Verify ORDER_AGENT_ID and model deployment in the same Foundry project.");
+            Console.Error.WriteLine("Hint: resource not found. Verify 'CasoC:OrderAgentId' and 'CasoC:AzureOpenAiDeployment' in the same Foundry project.");
         }
 
         if (ex.GetRawResponse() is { } rawResponse)

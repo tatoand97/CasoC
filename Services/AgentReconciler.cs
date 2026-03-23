@@ -69,56 +69,33 @@ internal sealed class AgentReconciler
         return null;
     }
 
-    internal string BuildDefinitionSignature(AgentDefinition definition)
+    internal static string BuildDefinitionSignature(AgentDefinition definition)
     {
         using JsonDocument document = JsonDocument.Parse(BinaryData.FromObjectAsJson(definition).ToString());
 
         string model = ReadString(document.RootElement, "model", "Model");
         string instructions = ReadString(document.RootElement, "instructions", "Instructions");
-
-        List<ToolSignature> tools = [];
-
-        JsonElement toolsElement = document.RootElement.TryGetProperty("tools", out JsonElement t1)
-            ? t1
-            : document.RootElement.TryGetProperty("Tools", out JsonElement t2)
-                ? t2
-                : default;
-
-        if (toolsElement.ValueKind == JsonValueKind.Array)
-        {
-            foreach (JsonElement tool in toolsElement.EnumerateArray())
-            {
-                string toolType = ReadString(tool, "type", "Type");
-                string agentId = string.Equals(toolType, "agent", StringComparison.OrdinalIgnoreCase)
-                    ? ReadString(tool, "agent_id", "agentId", "AgentId")
-                    : string.Empty;
-                string agentName = string.Equals(toolType, "agent", StringComparison.OrdinalIgnoreCase)
-                    ? ReadString(tool, "agent_name", "agentName", "AgentName")
-                    : string.Empty;
-                string toolName = ReadString(tool, "name", "Name");
-
-                tools.Add(new ToolSignature(
-                    toolType,
-                    agentId,
-                    agentName,
-                    toolName));
-            }
-        }
-
-        List<ToolSignature> orderedTools =
-        [
-            .. tools.OrderBy(x => x.Type, StringComparer.Ordinal)
-                .ThenBy(x => x.AgentId, StringComparer.Ordinal)
-                .ThenBy(x => x.AgentName, StringComparer.Ordinal)
-                .ThenBy(x => x.Name, StringComparer.Ordinal)
-        ];
+        string tools = ReadToolsSignature(document.RootElement);
 
         return JsonSerializer.Serialize(new
         {
             model,
             instructions,
-            tools = orderedTools,
+            tools,
         });
+    }
+
+    private static string ReadToolsSignature(JsonElement root)
+    {
+        JsonElement toolsElement = root.TryGetProperty("tools", out JsonElement t1)
+            ? t1
+            : root.TryGetProperty("Tools", out JsonElement t2)
+                ? t2
+                : default;
+
+        return toolsElement.ValueKind == JsonValueKind.Array
+            ? toolsElement.GetRawText()
+            : "[]";
     }
 
     private static string ReadString(JsonElement element, params string[] candidates)
@@ -133,9 +110,6 @@ internal sealed class AgentReconciler
 
         return string.Empty;
     }
-
-    private readonly record struct ToolSignature(string Type, string AgentId, string AgentName, string Name);
 }
 
 internal sealed record ReconcileResult(AgentVersion Version, string ReconciliationStatus, string Signature);
-

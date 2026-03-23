@@ -5,11 +5,11 @@ using System.Text.RegularExpressions;
 
 namespace CasoC.Agents;
 
-internal sealed class AgentToolFactory
+internal sealed partial class AgentToolFactory
 {
-    private static readonly Regex ToolNamePattern = new("^[a-z0-9_-]+$", RegexOptions.Compiled);
+    private static readonly Regex ToolNamePattern = MyRegex();
 
-    internal AgentTool CreateAgentTool(string agentId, string toolName)
+    internal static AgentTool CreateAgentTool(string agentId, string toolName)
     {
         if (string.IsNullOrWhiteSpace(agentId))
         {
@@ -25,16 +25,16 @@ internal sealed class AgentToolFactory
         AgentToolPayload payloadModel = new("agent", agentId, toolName);
         BinaryData payload = BinaryData.FromString(JsonSerializer.Serialize(payloadModel));
 
-        AgentTool? tool = ModelReaderWriter.Read<AgentTool>(payload);
-        if (tool is null)
-        {
-            throw new InvalidOperationException(
+        AgentTool? tool = ModelReaderWriter.Read<AgentTool>(payload) ?? throw new InvalidOperationException(
                 $"Failed to deserialize agent tool payload for toolName '{toolName}'.");
-        }
 
         return tool;
     }
 
-    private sealed record AgentToolPayload(string type, string agent_id, string name);
+    private sealed record AgentToolPayload(string Type, string Agent_id, string Name);
+
+    [GeneratedRegex("^[a-z0-9_-]+$", RegexOptions.Compiled)]
+    private static partial Regex MyRegex();
+
 }
 

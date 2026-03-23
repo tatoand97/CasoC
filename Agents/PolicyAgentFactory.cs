@@ -12,7 +12,7 @@ internal sealed class PolicyAgentFactory
         "No agregues información nueva. " +
         "No menciones herramientas ni agentes.";
 
-    internal PromptAgentDefinition Build(string deployment)
+    internal static PromptAgentDefinition Build(string deployment)
     {
         return new PromptAgentDefinition(deployment)
         {
