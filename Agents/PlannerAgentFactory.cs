@@ -4,11 +4,11 @@ namespace CasoC.Agents;
 
 internal sealed class PlannerAgentFactory
 {
-    internal const string AgentName = "planner-agent-casec-composer";
+    internal const string AgentName = "planner-agent-casec-orchestrated";
 
     private const string PlannerInstructions =
         """
-        Redactas la respuesta final para el usuario.
+        Redactas la respuesta final para el usuario cuando un runtime externo te invoca.
         Usa solo la solicitud original, los datos validados de la orden y el resultado validado de politica incluidos en el prompt.
         No inventes datos.
         No menciones herramientas, MCP, agentes, servicios ni backend.

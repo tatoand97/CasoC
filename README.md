@@ -1,91 +1,33 @@
-# Caso C - Orquestacion multi-agente desde la aplicacion (.NET 8, Responses API)
+# CasoC - Bootstrap Foundry-only (.NET 8)
 
-Console App de ejemplo para Azure AI Foundry que implementa un flujo multi-agente orquestado por la aplicacion .NET, no una delegacion agent-to-agent dentro de Foundry.
+`CasoC` es un repositorio de bootstrap/logical IaC para Azure AI Foundry. Su responsabilidad es validar configuracion y acceso al proyecto, validar el agente externo `OrderAgent`, reconciliar los agentes propios del caso y terminar.
 
-## Arquitectura implementada
+## Que hace este repo
 
-- La aplicacion coordina el flujo `OrderAgent -> PolicyAgent -> PlannerAgent`.
-- `OrderAgent` se reutiliza desde `OrderAgentId` y puede usar internamente el MCP configurado en Caso B.
-- `PolicyAgent` y `PlannerAgent` se crean dinamicamente mediante reconciliacion.
-- La aplicacion valida salidas estructuradas entre pasos antes de continuar.
-- `PlannerAgent` no delega a otros agentes ni usa agent tools.
+- Valida `CasoC:AzureOpenAiEndpoint`
+- Valida `CasoC:AzureOpenAiDeployment`
+- Valida el agente externo configurado en `CasoC:OrderAgentId`
+- Reconcilia `policy-agent-casec`
+- Reconcilia `planner-agent-casec-orchestrated`
+- Imprime un resumen final de bindings, ids y versiones
 
-```text
-User
-  |
-App Orchestrator (.NET 8)
-  |-- OrderAgent -> MCP -> APIM -> API REST
-  |-- PolicyAgent
-  '-- PlannerAgent
-```
+## Modelo operativo
 
-## Roles de los agentes
-
-- `OrderAgent`: recupera solo datos estructurados de la orden y debe devolver JSON valido.
-- `PolicyAgent`: decide si se requiere accion adicional a partir del JSON validado de la orden y devuelve JSON compacto.
-- `PlannerAgent`: redacta la respuesta final para el usuario usando solo la solicitud original y el contexto validado.
-
-## Contratos JSON validados por la aplicacion
-
-`OrderAgent` debe devolver:
-
-```json
-{
-  "id": "ORD-000001",
-  "status": "Created",
-  "requiresAction": true,
-  "reason": "optional string"
-}
-```
-
-Estados admitidos:
-
-```text
-Created, Confirmed, Packed, Shipped, Delivered, Cancelled, Unknown, NotFound
-```
-
-Si la orden no existe, el agente debe devolver JSON valido, por ejemplo:
-
-```json
-{
-  "id": "ORD-000001",
-  "status": "NotFound",
-  "requiresAction": false,
-  "reason": "Order not found"
-}
-```
-
-`PolicyAgent` debe devolver:
-
-```json
-{
-  "requiresAction": true,
-  "message": "short explanation"
-}
-```
-
-Si alguno de estos contratos falla, la aplicacion lanza `InvalidOperationException` antes de invocar al siguiente agente.
-
-## Requisitos
-
-- .NET SDK 8+
-- Endpoint de Azure AI Foundry Project
-- Permisos para listar agentes y crear versiones de agentes en el proyecto
-- Credenciales validas para `AzureCliCredential`
+- `OrderAgent` es externo a este repo. `CasoC` solo valida que exista y pueda ser referenciado.
+- `PolicyAgent` se crea o actualiza por reconciliacion.
+- `PlannerAgent` se crea o actualiza por reconciliacion.
+- El proceso termina despues del bootstrap. No hay ejecucion funcional posterior.
 
 ## Configuracion
 
-Ajusta `appsettings.json` en la raiz del proyecto:
+Configura `appsettings.json` en la raiz del proyecto:
 
 ```json
 {
   "CasoC": {
     "AzureOpenAiEndpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
     "AzureOpenAiDeployment": "<deployment-name>",
-    "OrderAgentId": "<existing-order-agent-id>",
-    "OrderAgentVersion": "latest",
-    "ResponsesTimeoutSeconds": 60,
-    "ResponsesMaxBackoffSeconds": 8
+    "OrderAgentId": "<existing-order-agent-id>"
   }
 }
 ```
@@ -96,60 +38,37 @@ Ajusta `appsettings.json` en la raiz del proyecto:
 dotnet run
 ```
 
-## Flujo de prueba incluido
-
-El programa envia automaticamente:
+## Salida esperada
 
 ```text
-Dame el estado de la orden ORD-000001 y dime si requiere accion.
+[CONFIG] Endpoint validado => https://<resource>.services.ai.azure.com/api/projects/<project>
+[CONFIG] Deployment validado => gpt-5.1-chat
+[VALIDATION] OrderAgentId validado => OrderAgent (latest version: 3)
+[RECONCILE] policy-agent-casec => unchanged (id: policy-agent-casec:3, version: 3)
+[RECONCILE] planner-agent-casec-orchestrated => created (id: planner-agent-casec-orchestrated:1, version: 1)
+[SUMMARY] Bindings => OrderAgent=OrderAgent (id: agent-id, version: 3); PolicyAgent=policy-agent-casec (id: policy-agent-casec:3, version: 3); PlannerAgent=planner-agent-casec-orchestrated (id: planner-agent-casec-orchestrated:1, version: 1)
+[SUMMARY] Foundry bootstrap completed
 ```
 
-La salida en consola muestra:
+## Que ya no hace este repo
 
-- la reconciliacion de `PolicyAgent` y `PlannerAgent`
-- el JSON validado de la orden
-- el resultado validado de politica
-- la respuesta final generada por `PlannerAgent`
+- No consume agentes
+- No ejecuta prompts
+- No orquesta `OrderAgent -> PolicyAgent -> PlannerAgent`
+- No usa Responses API como runtime
+- No expone API HTTP
+- No imprime respuestas de negocio para ordenes
 
-Ejemplo resumido:
+## Out of scope
 
-```text
-Inicializando clientes...
-OrderAgentId validado: OrderAgent
-PolicyAgent reconciliation:
-  AgentName: policy-agent-casec
-  AgentId: policy-agent-casec:2
-  AgentVersion: 2
-  ReconciliationStatus: updated
-PlannerAgent reconciliation:
-  AgentName: planner-agent-casec-composer
-  AgentId: planner-agent-casec-composer:1
-  AgentVersion: 1
-  ReconciliationStatus: created
+- runtime consumption
+- order/policy/planner orchestration
+- prompt execution
+- API exposure
 
-===== ORDER PAYLOAD VALIDADO =====
-{
-  "id": "ORD-000001",
-  "status": "Confirmed",
-  "requiresAction": false
-}
-===============================
+## Requisitos
 
-===== POLICY RESULT VALIDADO =====
-{
-  "requiresAction": false,
-  "message": "La orden no requiere accion adicional."
-}
-===============================
-
-===== RESPUESTA FINAL =====
-La orden ORD-000001 esta confirmada y no requiere accion adicional en este momento.
-===========================
-```
-
-## Notas
-
-- Este caso no implementa delegacion agent-to-agent dentro de Foundry.
-- La aplicacion es quien orquesta el workflow completo.
-- Se conserva el comportamiento existente de reconciliacion, polling y backoff para Responses API.
-- No se documenta ningun uso de agent tools porque no forman parte de la ruta real de ejecucion de este ejemplo.
+- .NET SDK 8+
+- Endpoint de Azure AI Foundry Project
+- Permisos para listar agentes, leer deployments y crear versiones de agentes
+- Credenciales validas para `AzureCliCredential`
