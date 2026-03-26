@@ -11,7 +11,7 @@ namespace CasoC;
 
 internal static class Program
 {
-    public static async Task Main()
+    public static async Task<int> Main()
     {
         using CancellationTokenSource cts = new();
         Console.CancelKeyPress += (_, args) =>
@@ -22,77 +22,90 @@ internal static class Program
 
         try
         {
-            CasoCSettings settings = LoadSettings();
-            string endpoint = GetRequiredSetting(settings.AzureOpenAiEndpoint, "CasoC:AzureOpenAiEndpoint");
-            string deploymentName = GetRequiredSetting(settings.AzureOpenAiDeployment, "CasoC:AzureOpenAiDeployment");
-            string orderAgentId = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
-
-            ValidateProjectEndpoint(endpoint);
-
-            AIProjectClient projectClient = new(new Uri(endpoint), new AzureCliCredential());
-
-            await ValidateIdentityCanAccessProjectAsync(projectClient, cts.Token);
-            Console.WriteLine($"[CONFIG] Endpoint validado => {endpoint}");
-
-            AIProjectDeployment deployment = await ValidateDeploymentAsync(projectClient, deploymentName, cts.Token);
-            Console.WriteLine($"[CONFIG] Deployment validado => {deployment.Name}");
-
-            AgentRecord orderAgent = await ValidateOrderAgentIdStrictAsync(projectClient, orderAgentId, cts.Token);
-            AgentVersion orderAgentVersion = await ResolveLatestAgentVersionAsync(projectClient, orderAgent.Name, cts.Token);
-            Console.WriteLine(
-                $"[VALIDATION] OrderAgentId validado => {orderAgentId} (latest version: {orderAgentVersion.Version})");
-
-            AgentReconciler reconciler = new(projectClient);
-
-            ReconcileResult policyResult = await reconciler.ReconcileAsync(
-                PolicyAgentFactory.AgentName,
-                PolicyAgentFactory.Build(deploymentName),
-                cts.Token);
-            PrintReconciliationResult(policyResult);
-
-            ReconcileResult plannerResult = await reconciler.ReconcileAsync(
-                PlannerAgentFactory.AgentName,
-                PlannerAgentFactory.Build(deploymentName),
-                cts.Token);
-            PrintReconciliationResult(plannerResult);
-
-            Console.WriteLine(
-                $"[SUMMARY] Bindings => OrderAgent={orderAgent.Name} (id: {orderAgent.Id}, version: {orderAgentVersion.Version}); " +
-                $"PolicyAgent={policyResult.Version.Name} (id: {policyResult.Version.Id}, version: {policyResult.Version.Version}); " +
-                $"PlannerAgent={plannerResult.Version.Name} (id: {plannerResult.Version.Id}, version: {plannerResult.Version.Version})");
-            Console.WriteLine("[SUMMARY] Foundry bootstrap completed");
-
-            Environment.ExitCode = 0;
+            BootstrapSummary summary = await BootstrapAsync(cts.Token);
+            WriteBootstrapSummary(summary);
+            return 0;
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
             Console.Error.WriteLine("[OperationCanceledException] Operacion cancelada por el usuario.");
-            Environment.ExitCode = 1;
+            return 1;
         }
         catch (RequestFailedException ex)
         {
             Console.Error.WriteLine($"[RequestFailedException] Status: {ex.Status}, Code: {ex.ErrorCode}, Message: {ex.Message}");
             PrintEndpointHint(ex.Message);
-            Environment.ExitCode = 1;
+            return 1;
         }
         catch (ClientResultException ex)
         {
             WriteClientError(ex);
             PrintEndpointHint(ex.Message);
-            Environment.ExitCode = 1;
+            return 1;
         }
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[{ex.GetType().Name}] {ex.Message}");
             PrintEndpointHint(ex.Message);
-            Environment.ExitCode = 1;
+            return 1;
         }
     }
 
-    private static void PrintReconciliationResult(ReconcileResult result)
+    private static async Task<BootstrapSummary> BootstrapAsync(CancellationToken cancellationToken)
+    {
+        CasoCSettings settings = LoadSettings();
+        string endpoint = GetRequiredSetting(settings.AzureOpenAiEndpoint, "CasoC:AzureOpenAiEndpoint");
+        string deploymentName = GetRequiredSetting(settings.AzureOpenAiDeployment, "CasoC:AzureOpenAiDeployment");
+        string orderAgentId = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
+
+        ValidateProjectEndpoint(endpoint);
+
+        AIProjectClient projectClient = CreateProjectClient(endpoint);
+        await ValidateProjectAccessAsync(projectClient, cancellationToken);
+        Console.WriteLine($"[CONFIG] Endpoint validado => {endpoint}");
+
+        AIProjectDeployment deployment = await ValidateDeploymentAsync(projectClient, deploymentName, cancellationToken);
+        Console.WriteLine($"[CONFIG] Deployment validado => {deployment.Name}");
+
+        ValidatedAgentBinding orderAgent = await ValidateOrderAgentBindingAsync(projectClient, orderAgentId, cancellationToken);
+        Console.WriteLine(
+            $"[VALIDATION] OrderAgentId validado => {orderAgentId} -> {orderAgent.Name} (id: {orderAgent.Id}, version: {orderAgent.Version})");
+
+        AgentReconciler reconciler = new(projectClient);
+
+        ReconcileResult policyResult = await reconciler.ReconcileAsync(
+            PolicyAgentFactory.AgentName,
+            PolicyAgentFactory.Build(deployment.Name),
+            cancellationToken);
+        WriteReconciliationResult(policyResult);
+
+        ReconcileResult plannerResult = await reconciler.ReconcileAsync(
+            PlannerAgentFactory.AgentName,
+            PlannerAgentFactory.Build(deployment.Name),
+            cancellationToken);
+        WriteReconciliationResult(plannerResult);
+
+        return new BootstrapSummary(endpoint, deployment.Name, orderAgent, policyResult, plannerResult);
+    }
+
+    private static AIProjectClient CreateProjectClient(string endpoint)
+    {
+        return new AIProjectClient(new Uri(endpoint), new AzureCliCredential());
+    }
+
+    private static void WriteReconciliationResult(ReconcileResult result)
     {
         Console.WriteLine(
             $"[RECONCILE] {result.Version.Name} => {result.ReconciliationStatus} (id: {result.Version.Id}, version: {result.Version.Version})");
+    }
+
+    private static void WriteBootstrapSummary(BootstrapSummary summary)
+    {
+        Console.WriteLine(
+            $"[SUMMARY] Bindings => OrderAgent={summary.OrderAgent.Name} (id: {summary.OrderAgent.Id}, version: {summary.OrderAgent.Version}); " +
+            $"PolicyAgent={summary.PolicyAgent.Version.Name} (id: {summary.PolicyAgent.Version.Id}, version: {summary.PolicyAgent.Version.Version}); " +
+            $"PlannerAgent={summary.PlannerAgent.Version.Name} (id: {summary.PlannerAgent.Version.Id}, version: {summary.PlannerAgent.Version.Version})");
+        Console.WriteLine("[SUMMARY] Foundry bootstrap completed");
     }
 
     private static async Task<AIProjectDeployment> ValidateDeploymentAsync(
@@ -129,7 +142,18 @@ internal static class Program
         }
     }
 
-    private static async Task ValidateIdentityCanAccessProjectAsync(
+    private static async Task<ValidatedAgentBinding> ValidateOrderAgentBindingAsync(
+        AIProjectClient projectClient,
+        string orderAgentId,
+        CancellationToken cancellationToken)
+    {
+        AgentRecord orderAgent = await ValidateOrderAgentIdStrictAsync(projectClient, orderAgentId, cancellationToken);
+        AgentVersion orderAgentVersion = await ResolveLatestAgentVersionAsync(projectClient, orderAgent.Name, cancellationToken);
+
+        return new ValidatedAgentBinding(orderAgent.Name, orderAgent.Id, orderAgentVersion.Version);
+    }
+
+    private static async Task ValidateProjectAccessAsync(
         AIProjectClient projectClient,
         CancellationToken cancellationToken)
     {
@@ -236,3 +260,12 @@ internal static class Program
         }
     }
 }
+
+internal sealed record BootstrapSummary(
+    string Endpoint,
+    string Deployment,
+    ValidatedAgentBinding OrderAgent,
+    ReconcileResult PolicyAgent,
+    ReconcileResult PlannerAgent);
+
+internal sealed record ValidatedAgentBinding(string Name, string Id, string Version);

@@ -8,7 +8,7 @@ internal sealed class PlannerAgentFactory
 
     private const string PlannerInstructions =
         """
-        Redactas la respuesta final para el usuario cuando un runtime externo te invoca.
+        Redactas la respuesta final para el usuario a partir del contexto consolidado que recibes.
         Usa solo la solicitud original, los datos validados de la orden y el resultado validado de politica incluidos en el prompt.
         No inventes datos.
         No menciones herramientas, MCP, agentes, servicios ni backend.

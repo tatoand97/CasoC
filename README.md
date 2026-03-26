@@ -1,22 +1,35 @@
-# CasoC - Bootstrap Foundry-only (.NET 8)
+# CasoC
 
-`CasoC` es un repositorio de bootstrap/logical IaC para Azure AI Foundry. Su responsabilidad es validar configuracion y acceso al proyecto, validar el agente externo `OrderAgent`, reconciliar los agentes propios del caso y terminar.
+`CasoC` es un repositorio de bootstrap / logical IaC para Azure AI Foundry en .NET 8.
 
-## Que hace este repo
+Su unica responsabilidad es preparar y reconciliar agentes dentro de un proyecto Foundry. Este repo no consume agentes, no ejecuta prompts y no orquesta flujo de negocio.
 
-- Valida `CasoC:AzureOpenAiEndpoint`
-- Valida `CasoC:AzureOpenAiDeployment`
-- Valida el agente externo configurado en `CasoC:OrderAgentId`
-- Reconcilia `policy-agent-casec`
-- Reconcilia `planner-agent-casec-orchestrated`
-- Imprime un resumen final de bindings, ids y versiones
+## Scope
 
-## Modelo operativo
+- Validar `CasoC:AzureOpenAiEndpoint`
+- Validar acceso al proyecto Foundry
+- Validar `CasoC:AzureOpenAiDeployment`
+- Validar el agente externo configurado en `CasoC:OrderAgentId`
+- Reconciliar `policy-agent-casec`
+- Reconciliar `planner-agent-casec-orchestrated`
+- Imprimir resumen final de bindings, ids y versiones
+- Terminar con codigo `0` si todo sale bien
+
+## Agentes
 
 - `OrderAgent` es externo a este repo. `CasoC` solo valida que exista y pueda ser referenciado.
 - `PolicyAgent` se crea o actualiza por reconciliacion.
 - `PlannerAgent` se crea o actualiza por reconciliacion.
-- El proceso termina despues del bootstrap. No hay ejecucion funcional posterior.
+
+## Lo que este repo no hace
+
+- No ejecuta el flujo `OrderAgent -> PolicyAgent -> PlannerAgent`
+- No consume ni invoca agentes como runtime
+- No ejecuta prompts de prueba
+- No hace polling de respuestas
+- No imprime respuestas de negocio
+- No expone API HTTP
+- No actua como consola de consumo
 
 ## Configuracion
 
@@ -32,32 +45,25 @@ Configura `appsettings.json` en la raiz del proyecto:
 }
 ```
 
-## Ejecutar
+## Ejecucion
 
 ```powershell
 dotnet run
 ```
+
+La ejecucion hace bootstrap del proyecto Foundry y termina. No existe una fase posterior de consumo.
 
 ## Salida esperada
 
 ```text
 [CONFIG] Endpoint validado => https://<resource>.services.ai.azure.com/api/projects/<project>
 [CONFIG] Deployment validado => gpt-5.1-chat
-[VALIDATION] OrderAgentId validado => OrderAgent (latest version: 3)
+[VALIDATION] OrderAgentId validado => OrderAgent -> OrderAgent (id: agent-id, version: 3)
 [RECONCILE] policy-agent-casec => unchanged (id: policy-agent-casec:3, version: 3)
 [RECONCILE] planner-agent-casec-orchestrated => created (id: planner-agent-casec-orchestrated:1, version: 1)
 [SUMMARY] Bindings => OrderAgent=OrderAgent (id: agent-id, version: 3); PolicyAgent=policy-agent-casec (id: policy-agent-casec:3, version: 3); PlannerAgent=planner-agent-casec-orchestrated (id: planner-agent-casec-orchestrated:1, version: 1)
 [SUMMARY] Foundry bootstrap completed
 ```
-
-## Que ya no hace este repo
-
-- No consume agentes
-- No ejecuta prompts
-- No orquesta `OrderAgent -> PolicyAgent -> PlannerAgent`
-- No usa Responses API como runtime
-- No expone API HTTP
-- No imprime respuestas de negocio para ordenes
 
 ## Out of scope
 
@@ -68,7 +74,7 @@ dotnet run
 
 ## Requisitos
 
-- .NET SDK 8+
+- .NET SDK 8 o superior
 - Endpoint de Azure AI Foundry Project
 - Permisos para listar agentes, leer deployments y crear versiones de agentes
 - Credenciales validas para `AzureCliCredential`
