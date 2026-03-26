@@ -10,7 +10,7 @@ internal sealed class CasoCSettings
 
     public string? OrderAgentId { get; init; }
 
-    // Opcional: si es null, vacío o "latest" se usará la versión más reciente disponible.
+    // Opcional: si es null, vacio o "latest" se usara la version mas reciente disponible.
     public string? OrderAgentVersion { get; init; }
 
     public int ResponsesTimeoutSeconds { get; init; } = 60;

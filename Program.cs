@@ -6,44 +6,75 @@ using CasoC.Agents;
 using CasoC.Services;
 using Microsoft.Extensions.Configuration;
 using System.ClientModel;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace CasoC;
 
 internal static class Program
 {
-    private const string TestPrompt = "Dame el estado de la orden ORD-000001 y dime si requiere acción.";
+    private const string TestUserRequest = "Dame el estado de la orden ORD-000001 y dime si requiere accion.";
+    private const string SupportedOrderStatusList = "Created, Confirmed, Packed, Shipped, Delivered, Cancelled, Unknown, NotFound";
+
     private const string OrderAgentPromptTemplate =
         """
-        Extrae y devuelve solo los datos relevantes para resolver esta solicitud.
-        Si faltan datos, indícalo explícitamente.
+        Recupera solo datos estructurados de la orden solicitada. Usa tu herramienta MCP configurada si aplica.
+        Devuelve un unico objeto JSON y nada mas.
+        No uses markdown.
+        No agregues explicaciones ni texto fuera del JSON.
+        Campos requeridos: "id", "status", "requiresAction".
+        Campo opcional: "reason".
+        Valores validos para "status": "Created", "Confirmed", "Packed", "Shipped", "Delivered", "Cancelled", "Unknown", "NotFound".
+        Si no encuentras la orden, devuelve:
+        {{"id":"<id solicitado>","status":"NotFound","requiresAction":false,"reason":"Order not found"}}
+        Si no puedes clasificar el estado con certeza, usa "Unknown" y explica el motivo en "reason".
 
         Solicitud del usuario:
         {0}
         """;
+
     private const string PolicyAgentPromptTemplate =
         """
-        Evalúa la siguiente información de la orden y determina si requiere acción.
-        Responde de forma clara y profesional sin agregar información nueva.
+        Evalua esta orden validada y devuelve la evaluacion de politica en el formato requerido.
+        Devuelve solo JSON valido sin markdown ni texto adicional.
+        Usa exactamente este formato:
+        {{"requiresAction": true, "message": "explicacion breve"}}
+
+        Orden validada:
+        {0}
+        """;
+
+    private const string PlannerPromptTemplate =
+        """
+        Genera la respuesta final para el usuario usando solo este contexto validado.
 
         Solicitud original:
         {0}
 
         Datos de la orden:
         {1}
-        """;
-    private const string PlannerPromptTemplate =
-        """
-        Genera la respuesta final para el usuario usando exclusivamente el contexto disponible.
 
-        Solicitud original:
-        {0}
-
-        Datos obtenidos de la orden:
-        {1}
-
-        Evaluación de política:
+        Evaluacion de politica:
         {2}
         """;
+
+    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+    };
+
+    private static readonly Dictionary<string, string> SupportedOrderStatuses = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["Created"] = "Created",
+        ["Confirmed"] = "Confirmed",
+        ["Packed"] = "Packed",
+        ["Shipped"] = "Shipped",
+        ["Delivered"] = "Delivered",
+        ["Cancelled"] = "Cancelled",
+        ["Unknown"] = "Unknown",
+        ["NotFound"] = "NotFound",
+    };
 
     public static async Task Main()
     {
@@ -60,7 +91,6 @@ internal static class Program
             string endpoint = GetRequiredSetting(settings.AzureOpenAiEndpoint, "CasoC:AzureOpenAiEndpoint");
             string deployment = GetRequiredSetting(settings.AzureOpenAiDeployment, "CasoC:AzureOpenAiDeployment");
             string orderAgentId = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
-            // Nueva: valor opcional para escoger versión. Si es null/empty/"latest" -> usar la última.
             string? orderAgentVersionSetting = settings.OrderAgentVersion;
             int timeoutSeconds = GetPositiveSetting(settings.ResponsesTimeoutSeconds, "CasoC:ResponsesTimeoutSeconds");
             int maxBackoffSeconds = GetPositiveSetting(settings.ResponsesMaxBackoffSeconds, "CasoC:ResponsesMaxBackoffSeconds");
@@ -70,6 +100,7 @@ internal static class Program
             Console.WriteLine("Inicializando clientes...");
             AIProjectClient projectClient = new(new Uri(endpoint), new AzureCliCredential());
             ProjectOpenAIClient openAiClient = projectClient.OpenAI;
+            TimeSpan responseTimeout = TimeSpan.FromSeconds(timeoutSeconds);
 
             await ValidateIdentityCanAccessProjectAsync(projectClient, cts.Token);
             await ValidateOrderAgentIdStrictAsync(projectClient, orderAgentId, cts.Token);
@@ -92,45 +123,49 @@ internal static class Program
 
             PrintReconciliationResult("PlannerAgent", plannerResult);
 
-            // Resuelve la versión del OrderAgent a usar (nombre de versión que consume Responses).
-            string orderAgentResponseName = await ResolveOrderAgentVersionAsync(projectClient, orderAgentId, orderAgentVersionSetting, cts.Token);
-            Console.WriteLine($"Usando OrderAgent (response client name): {orderAgentResponseName}"); 
+            string orderAgentResponseName = await ResolveOrderAgentVersionAsync(
+                projectClient,
+                orderAgentId,
+                orderAgentVersionSetting,
+                cts.Token);
 
-            string orderContext = await runner.RunPromptAsync(
+            Console.WriteLine($"Usando OrderAgent (response client name): {orderAgentResponseName}");
+
+            string orderAgentResponse = await RunOrderAgentAsync(
+                runner,
                 openAiClient,
                 orderAgentResponseName,
-                string.Format(OrderAgentPromptTemplate, TestPrompt),
-                TimeSpan.FromSeconds(timeoutSeconds),
+                TestUserRequest,
+                responseTimeout,
                 cts.Token);
 
-            Console.WriteLine();
-            Console.WriteLine("===== CONTEXTO DEL ORDER AGENT =====");
-            Console.WriteLine(orderContext);
-            Console.WriteLine("====================================");
+            ValidatedOrderContext orderContext = ParseAndValidateOrderContext(orderAgentResponse);
+            string validatedOrderJson = SerializeValidatedJson(orderContext);
+            WriteConsoleSection("ORDER PAYLOAD VALIDADO", validatedOrderJson);
 
-            string policyResultText = await runner.RunPromptAsync(
+            string policyAgentResponse = await RunPolicyAgentAsync(
+                runner,
                 openAiClient,
                 policyResult.Version.Name,
-                string.Format(PolicyAgentPromptTemplate, TestPrompt, orderContext),
-                TimeSpan.FromSeconds(timeoutSeconds),
+                validatedOrderJson,
+                responseTimeout,
                 cts.Token);
 
-            Console.WriteLine();
-            Console.WriteLine("===== EVALUACION DEL POLICY AGENT =====");
-            Console.WriteLine(policyResultText);
-            Console.WriteLine("=======================================");
+            ValidatedPolicyAssessment policyAssessment = ParseAndValidatePolicyAssessment(policyAgentResponse);
+            string validatedPolicyJson = SerializeValidatedJson(policyAssessment);
+            WriteConsoleSection("POLICY RESULT VALIDADO", validatedPolicyJson);
 
-            string finalText = await runner.RunPromptAsync(
+            string finalText = await RunPlannerAgentAsync(
+                runner,
                 openAiClient,
                 plannerResult.Version.Name,
-                string.Format(PlannerPromptTemplate, TestPrompt, orderContext, policyResultText),
-                TimeSpan.FromSeconds(timeoutSeconds),
+                TestUserRequest,
+                validatedOrderJson,
+                validatedPolicyJson,
+                responseTimeout,
                 cts.Token);
 
-            Console.WriteLine();
-            Console.WriteLine("===== RESPUESTA FINAL DEL PLANNER =====");
-            Console.WriteLine(finalText);
-            Console.WriteLine("=======================================");
+            WriteConsoleSection("RESPUESTA FINAL", finalText);
         }
         catch (TimeoutException ex)
         {
@@ -139,7 +174,7 @@ internal static class Program
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            Console.Error.WriteLine("[OperationCanceledException] Operación cancelada por el usuario.");
+            Console.Error.WriteLine("[OperationCanceledException] Operacion cancelada por el usuario.");
             Environment.ExitCode = 1;
         }
         catch (RequestFailedException ex)
@@ -160,6 +195,177 @@ internal static class Program
             PrintEndpointHint(ex.Message);
             Environment.ExitCode = 1;
         }
+    }
+
+    private static async Task<string> RunOrderAgentAsync(
+        AgentRunner runner,
+        ProjectOpenAIClient openAiClient,
+        string orderAgentResponseName,
+        string userRequest,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        return await runner.RunPromptAsync(
+            openAiClient,
+            orderAgentResponseName,
+            string.Format(OrderAgentPromptTemplate, userRequest),
+            timeout,
+            cancellationToken);
+    }
+
+    private static ValidatedOrderContext ParseAndValidateOrderContext(string responseText)
+    {
+        OrderAgentResponseDto payload = DeserializeJsonObject<OrderAgentResponseDto>(responseText, "OrderAgent");
+
+        if (string.IsNullOrWhiteSpace(payload.Id))
+        {
+            throw new InvalidOperationException(
+                $"OrderAgent JSON is missing required field 'id' or it is empty. Raw response: {BuildResponseSnippet(responseText)}");
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Status))
+        {
+            throw new InvalidOperationException(
+                $"OrderAgent JSON is missing required field 'status' or it is empty. Raw response: {BuildResponseSnippet(responseText)}");
+        }
+
+        if (payload.RequiresAction is null)
+        {
+            throw new InvalidOperationException(
+                $"OrderAgent JSON is missing required field 'requiresAction'. Raw response: {BuildResponseSnippet(responseText)}");
+        }
+
+        string normalizedStatus = NormalizeOrderStatus(payload.Status);
+
+        return new ValidatedOrderContext
+        {
+            Id = payload.Id.Trim(),
+            Status = normalizedStatus,
+            RequiresAction = payload.RequiresAction.Value,
+            Reason = string.IsNullOrWhiteSpace(payload.Reason) ? null : payload.Reason.Trim(),
+        };
+    }
+
+    private static async Task<string> RunPolicyAgentAsync(
+        AgentRunner runner,
+        ProjectOpenAIClient openAiClient,
+        string policyAgentName,
+        string validatedOrderJson,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        return await runner.RunPromptAsync(
+            openAiClient,
+            policyAgentName,
+            string.Format(PolicyAgentPromptTemplate, validatedOrderJson),
+            timeout,
+            cancellationToken);
+    }
+
+    private static ValidatedPolicyAssessment ParseAndValidatePolicyAssessment(string responseText)
+    {
+        PolicyAgentResponseDto payload = DeserializeJsonObject<PolicyAgentResponseDto>(responseText, "PolicyAgent");
+
+        if (payload.RequiresAction is null)
+        {
+            throw new InvalidOperationException(
+                $"PolicyAgent JSON is missing required field 'requiresAction'. Raw response: {BuildResponseSnippet(responseText)}");
+        }
+
+        if (string.IsNullOrWhiteSpace(payload.Message))
+        {
+            throw new InvalidOperationException(
+                $"PolicyAgent JSON is missing required field 'message' or it is empty. Raw response: {BuildResponseSnippet(responseText)}");
+        }
+
+        return new ValidatedPolicyAssessment
+        {
+            RequiresAction = payload.RequiresAction.Value,
+            Message = payload.Message.Trim(),
+        };
+    }
+
+    private static async Task<string> RunPlannerAgentAsync(
+        AgentRunner runner,
+        ProjectOpenAIClient openAiClient,
+        string plannerAgentName,
+        string userRequest,
+        string validatedOrderJson,
+        string validatedPolicyJson,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
+    {
+        return await runner.RunPromptAsync(
+            openAiClient,
+            plannerAgentName,
+            string.Format(PlannerPromptTemplate, userRequest, validatedOrderJson, validatedPolicyJson),
+            timeout,
+            cancellationToken);
+    }
+
+    private static T DeserializeJsonObject<T>(string responseText, string agentLabel)
+        where T : class
+    {
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(responseText);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                throw new InvalidOperationException(
+                    $"{agentLabel} returned invalid JSON. Expected a single JSON object. Raw response: {BuildResponseSnippet(responseText)}");
+            }
+
+            T? payload = JsonSerializer.Deserialize<T>(document.RootElement.GetRawText(), JsonOptions);
+            return payload ?? throw new InvalidOperationException(
+                $"{agentLabel} returned an empty JSON payload. Raw response: {BuildResponseSnippet(responseText)}");
+        }
+        catch (JsonException ex)
+        {
+            throw new InvalidOperationException(
+                $"{agentLabel} returned invalid JSON. Expected a single JSON object. Raw response: {BuildResponseSnippet(responseText)}",
+                ex);
+        }
+    }
+
+    private static string NormalizeOrderStatus(string status)
+    {
+        string candidate = status.Trim();
+        if (!SupportedOrderStatuses.TryGetValue(candidate, out string? normalized))
+        {
+            throw new InvalidOperationException(
+                $"OrderAgent JSON field 'status' has unsupported value '{candidate}'. Supported values: {SupportedOrderStatusList}.");
+        }
+
+        return normalized;
+    }
+
+    private static string SerializeValidatedJson<T>(T payload)
+    {
+        return JsonSerializer.Serialize(payload, JsonOptions);
+    }
+
+    private static string BuildResponseSnippet(string responseText)
+    {
+        const int MaxLength = 240;
+        string condensed = responseText
+            .Replace("\r", " ", StringComparison.Ordinal)
+            .Replace("\n", " ", StringComparison.Ordinal)
+            .Trim();
+
+        if (condensed.Length <= MaxLength)
+        {
+            return condensed;
+        }
+
+        return $"{condensed[..MaxLength]}...";
+    }
+
+    private static void WriteConsoleSection(string title, string content)
+    {
+        Console.WriteLine();
+        Console.WriteLine($"===== {title} =====");
+        Console.WriteLine(content);
+        Console.WriteLine(new string('=', title.Length + 12));
     }
 
     private static void PrintReconciliationResult(string label, ReconcileResult result)
@@ -183,7 +389,7 @@ internal static class Program
         catch (ClientResultException ex) when (ex.Status == 404)
         {
             throw new InvalidOperationException(
-                $"La configuración 'CasoC:OrderAgentId' con valor '{orderAgentId}' no existe en el proyecto o no es accesible.",
+                $"La configuracion 'CasoC:OrderAgentId' con valor '{orderAgentId}' no existe en el proyecto o no es accesible.",
                 ex);
         }
     }
@@ -198,14 +404,12 @@ internal static class Program
         }
     }
 
-    // Nueva: resuelve el nombre de versión (Version.Name) para usar con ProjectResponsesClient.
     private static async Task<string> ResolveOrderAgentVersionAsync(
         AIProjectClient projectClient,
         string agentNameOrId,
         string? versionSetting,
         CancellationToken cancellationToken)
     {
-        // Si no se especifica versión o está marcada como "latest", devolver la versión más reciente.
         if (string.IsNullOrWhiteSpace(versionSetting) ||
             string.Equals(versionSetting, "latest", StringComparison.OrdinalIgnoreCase))
         {
@@ -218,10 +422,9 @@ internal static class Program
                 return version.Name;
             }
 
-            throw new InvalidOperationException($"No se encontró ninguna versión para el agente '{agentNameOrId}'.");
+            throw new InvalidOperationException($"No se encontro ninguna version para el agente '{agentNameOrId}'.");
         }
 
-        // Si el usuario indicó una cadena concreta, buscar una versión que coincida por Name, Id o Version.
         await foreach (AgentVersion version in projectClient.Agents.GetAgentVersionsAsync(
                            agentName: agentNameOrId,
                            cancellationToken: cancellationToken))
@@ -235,7 +438,7 @@ internal static class Program
         }
 
         throw new InvalidOperationException(
-            $"No se encontró la versión '{versionSetting}' para el agente '{agentNameOrId}'. Use 'latest' o deje vacío para la versión más reciente.");
+            $"No se encontro la version '{versionSetting}' para el agente '{agentNameOrId}'. Use 'latest' o deje vacio para la version mas reciente.");
     }
 
     private static CasoCSettings LoadSettings()
@@ -252,7 +455,7 @@ internal static class Program
         if (settings is null)
         {
             throw new InvalidOperationException(
-                $"No se encontró la sección '{CasoCSettings.SectionName}' en appsettings.json.");
+                $"No se encontro la seccion '{CasoCSettings.SectionName}' en appsettings.json.");
         }
 
         return settings;
@@ -263,7 +466,7 @@ internal static class Program
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new InvalidOperationException(
-                $"La clave requerida '{key}' no está configurada en appsettings.json.");
+                $"La clave requerida '{key}' no esta configurada en appsettings.json.");
         }
 
         return value;
@@ -325,5 +528,41 @@ internal static class Program
             Console.Error.WriteLine($"RequestId: {requestId}");
             Console.Error.WriteLine($"ClientRequestId: {clientRequestId}");
         }
+    }
+
+    private sealed class OrderAgentResponseDto
+    {
+        public string? Id { get; init; }
+
+        public string? Status { get; init; }
+
+        public bool? RequiresAction { get; init; }
+
+        public string? Reason { get; init; }
+    }
+
+    private sealed class ValidatedOrderContext
+    {
+        public required string Id { get; init; }
+
+        public required string Status { get; init; }
+
+        public required bool RequiresAction { get; init; }
+
+        public string? Reason { get; init; }
+    }
+
+    private sealed class PolicyAgentResponseDto
+    {
+        public bool? RequiresAction { get; init; }
+
+        public string? Message { get; init; }
+    }
+
+    private sealed class ValidatedPolicyAssessment
+    {
+        public required bool RequiresAction { get; init; }
+
+        public required string Message { get; init; }
     }
 }

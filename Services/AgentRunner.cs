@@ -1,4 +1,4 @@
-﻿using Azure.AI.Projects.OpenAI;
+using Azure.AI.Projects.OpenAI;
 using OpenAI.Responses;
 using System.ClientModel;
 
@@ -20,7 +20,7 @@ internal sealed class AgentRunner
 
     internal async Task<string> RunPromptAsync(
         ProjectOpenAIClient openAi,
-        string plannerAgentName,
+        string agentResponseName,
         string prompt,
         TimeSpan timeout,
         CancellationToken cancellationToken)
@@ -30,7 +30,7 @@ internal sealed class AgentRunner
             throw new InvalidOperationException("Timeout must be a positive time span.");
         }
 
-        ProjectResponsesClient responseClient = openAi.GetProjectResponsesClientForAgent(plannerAgentName);
+        ProjectResponsesClient responseClient = openAi.GetProjectResponsesClientForAgent(agentResponseName);
         cancellationToken.ThrowIfCancellationRequested();
         ClientResult<ResponseResult> created = await responseClient.CreateResponseAsync(prompt);
         ResponseResult response = created.Value;
@@ -48,7 +48,7 @@ internal sealed class AgentRunner
             if (response.Status is ResponseStatus.Failed or ResponseStatus.Incomplete or ResponseStatus.Cancelled)
             {
                 throw new InvalidOperationException(
-                    $"Planner response ended in terminal status '{response.Status}'. ResponseId: {response.Id}. Error: {response.Error?.Message ?? "n/a"}");
+                    $"Agent response ended in terminal status '{response.Status}'. ResponseId: {response.Id}. Error: {response.Error?.Message ?? "n/a"}");
             }
 
             TimeSpan remaining = deadline - DateTimeOffset.UtcNow;
@@ -70,4 +70,3 @@ internal sealed class AgentRunner
         }
     }
 }
-
