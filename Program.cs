@@ -85,7 +85,7 @@ internal static class Program
             cancellationToken);
         WriteReconciliationResult(plannerResult);
 
-        return new BootstrapSummary(endpoint, deployment.Name, orderAgent, policyResult, plannerResult);
+        return new BootstrapSummary(orderAgent, policyResult, plannerResult);
     }
 
     private static AIProjectClient CreateProjectClient(string endpoint)
@@ -262,8 +262,6 @@ internal static class Program
 }
 
 internal sealed record BootstrapSummary(
-    string Endpoint,
-    string Deployment,
     ValidatedAgentBinding OrderAgent,
     ReconcileResult PolicyAgent,
     ReconcileResult PlannerAgent);

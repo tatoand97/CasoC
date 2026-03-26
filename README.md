@@ -2,7 +2,7 @@
 
 `CasoC` es un repositorio de bootstrap / logical IaC para Azure AI Foundry en .NET 8.
 
-Su unica responsabilidad es preparar y reconciliar agentes dentro de un proyecto Foundry. Este repo no consume agentes, no ejecuta prompts y no orquesta flujo de negocio.
+Su unica responsabilidad es preparar y reconciliar agentes dentro de un proyecto Foundry. Este repo no consume agentes, no ejecuta prompts y no orquesta flujo de negocio. El consumo y la orquestacion viven fuera de este repositorio, en otro repo o servicio.
 
 ## Scope
 
@@ -21,6 +21,13 @@ Su unica responsabilidad es preparar y reconciliar agentes dentro de un proyecto
 - `PolicyAgent` se crea o actualiza por reconciliacion.
 - `PlannerAgent` se crea o actualiza por reconciliacion.
 
+## Rol del repositorio
+
+- Prepara el proyecto Foundry para que otros consumidores puedan enlazar los agentes esperados.
+- Valida que `OrderAgentId` apunte a un agente externo existente.
+- Reconciliacion de `policy-agent-casec` y `planner-agent-casec-orchestrated`.
+- Termina despues del bootstrap; no existe fase de ejecucion de negocio en este repo.
+
 ## Lo que este repo no hace
 
 - No ejecuta el flujo `OrderAgent -> PolicyAgent -> PlannerAgent`
@@ -30,6 +37,7 @@ Su unica responsabilidad es preparar y reconciliar agentes dentro de un proyecto
 - No imprime respuestas de negocio
 - No expone API HTTP
 - No actua como consola de consumo
+- No contiene el servicio o repo que consume/orquesta estos agentes
 
 ## Configuracion
 
