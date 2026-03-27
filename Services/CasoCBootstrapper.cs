@@ -45,6 +45,7 @@ internal sealed class CasoCBootstrapper
             $"[RECONCILE] {policyResult.Version.Name} => {policyResult.ReconciliationStatus} (id: {policyResult.Version.Id}, version: {policyResult.Version.Version})");
 
         A2AToolBinding orderBinding = ResolveA2AConnection(
+            "OrderAgent",
             _settings.OrderA2AConnectionName!,
             _settings.OrderA2ABaseUri,
             "CasoC:OrderA2AConnectionName",
@@ -54,6 +55,7 @@ internal sealed class CasoCBootstrapper
             $"[VALIDATION] Order A2A connection validated => name: {orderBinding.Name}, id: {orderBinding.Id}, type: {orderBinding.Type}");
 
         A2AToolBinding policyBinding = ResolveA2AConnection(
+            "PolicyAgent",
             _settings.PolicyA2AConnectionName!,
             _settings.PolicyA2ABaseUri,
             "CasoC:PolicyA2AConnectionName",
@@ -112,6 +114,7 @@ internal sealed class CasoCBootstrapper
     }
 
     private A2AToolBinding ResolveA2AConnection(
+        string targetAgent,
         string connectionName,
         string? configuredBaseUri,
         string connectionSettingKey,
@@ -126,11 +129,11 @@ internal sealed class CasoCBootstrapper
         }
         catch (ClientResultException ex) when (ex.Status == 404)
         {
-            throw BuildMissingConnectionException(connectionName, connectionSettingKey, missingConnectionGuidance, ex);
+            throw BuildMissingConnectionException(targetAgent, connectionName, connectionSettingKey, missingConnectionGuidance, ex);
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            throw BuildMissingConnectionException(connectionName, connectionSettingKey, missingConnectionGuidance, ex);
+            throw BuildMissingConnectionException(targetAgent, connectionName, connectionSettingKey, missingConnectionGuidance, ex);
         }
 
         string connectionType = connection.Type.ToString();
@@ -150,6 +153,7 @@ internal sealed class CasoCBootstrapper
         }
 
         return new A2AToolBinding(
+            targetAgent,
             connection.Name,
             connection.Id,
             connectionType,
@@ -157,13 +161,14 @@ internal sealed class CasoCBootstrapper
     }
 
     private static InvalidOperationException BuildMissingConnectionException(
+        string targetAgent,
         string connectionName,
         string connectionSettingKey,
         string missingConnectionGuidance,
         Exception innerException)
     {
         return new InvalidOperationException(
-            $"The required A2A connection '{connectionName}' from '{connectionSettingKey}' was not found in the Foundry project. " +
+            $"The required {targetAgent} A2A connection '{connectionName}' from '{connectionSettingKey}' was not found in the Foundry project. " +
             missingConnectionGuidance,
             innerException);
     }

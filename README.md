@@ -43,7 +43,7 @@ Antes de completar el bootstrap de `PlannerAgent`, tambien debe existir una A2A 
 
 ## Configuration
 
-`appsettings.json` debe contener:
+`appsettings.json` debe contener valores alineados con la clase `CasoCA2ASettings`:
 
 ```json
 {
@@ -71,6 +71,7 @@ Reglas:
 - `OrderA2AConnectionName` es requerido
 - `PolicyA2AConnectionName` es requerido
 - `OrderA2ABaseUri` y `PolicyA2ABaseUri` son opcionales
+- `OrderA2AConnectionName` y `PolicyA2AConnectionName` deben resolver a dos conexiones distintas
 - Si una connection no es `RemoteA2A`, se debe informar su base URI manualmente en el setting correspondiente
 
 ## Bootstrap Flow

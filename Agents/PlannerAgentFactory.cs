@@ -22,15 +22,46 @@ internal static class PlannerAgentFactory
         A2AToolBinding orderBinding,
         A2AToolBinding policyBinding)
     {
+        EnsureDistinctBindings(orderBinding, policyBinding);
+
         PromptAgentDefinition definition = new(modelDeploymentName)
         {
             Instructions = PlannerInstructions,
         };
 
-        definition.Tools.Add(CreateA2ATool(orderBinding));
-        definition.Tools.Add(CreateA2ATool(policyBinding));
+        definition.Tools.Add(CreateOrderA2ATool(orderBinding));
+        definition.Tools.Add(CreatePolicyA2ATool(policyBinding));
 
         return definition;
+    }
+
+    private static void EnsureDistinctBindings(A2AToolBinding orderBinding, A2AToolBinding policyBinding)
+    {
+        if (string.Equals(orderBinding.Id, policyBinding.Id, StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "PlannerAgent requires two distinct A2A connections: one for OrderAgent and one for PolicyAgent.");
+        }
+    }
+
+    private static A2APreviewTool CreateOrderA2ATool(A2AToolBinding binding)
+    {
+        if (!string.Equals(binding.TargetAgent, "OrderAgent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The first PlannerAgent A2A tool must target OrderAgent.");
+        }
+
+        return CreateA2ATool(binding);
+    }
+
+    private static A2APreviewTool CreatePolicyA2ATool(A2AToolBinding binding)
+    {
+        if (!string.Equals(binding.TargetAgent, "PolicyAgent", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException("The second PlannerAgent A2A tool must target PolicyAgent.");
+        }
+
+        return CreateA2ATool(binding);
     }
 
     private static A2APreviewTool CreateA2ATool(A2AToolBinding binding)

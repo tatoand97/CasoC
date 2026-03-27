@@ -74,20 +74,23 @@ internal sealed class AgentReconciler
     internal static string BuildDefinitionSignature(AgentDefinition definition)
     {
         using JsonDocument document = JsonDocument.Parse(BinaryData.FromObjectAsJson(definition).ToString());
+        JsonElement root = document.RootElement;
 
-        string model = ReadString(document.RootElement, "model", "Model");
-        string instructions = ReadString(document.RootElement, "instructions", "Instructions");
-        string tools = ReadToolsSignature(document.RootElement);
+        string kind = ReadString(root, "kind", "Kind");
+        string model = ReadString(root, "model", "Model");
+        string instructions = ReadString(root, "instructions", "Instructions");
+        object? tools = ReadToolsSignature(root);
 
         return JsonSerializer.Serialize(new
         {
+            kind,
             model,
             instructions,
             tools,
         });
     }
 
-    private static string ReadToolsSignature(JsonElement root)
+    private static object? ReadToolsSignature(JsonElement root)
     {
         JsonElement toolsElement = root.TryGetProperty("tools", out JsonElement t1)
             ? t1
@@ -96,8 +99,32 @@ internal sealed class AgentReconciler
                 : default;
 
         return toolsElement.ValueKind == JsonValueKind.Array
-            ? toolsElement.GetRawText()
-            : "[]";
+            ? NormalizeJsonElement(toolsElement)
+            : Array.Empty<object>();
+    }
+
+    private static object? NormalizeJsonElement(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.Object => element
+                .EnumerateObject()
+                .OrderBy(property => property.Name, StringComparer.Ordinal)
+                .ToDictionary(
+                    property => property.Name,
+                    property => NormalizeJsonElement(property.Value),
+                    StringComparer.Ordinal),
+            JsonValueKind.Array => element
+                .EnumerateArray()
+                .Select(NormalizeJsonElement)
+                .ToArray(),
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.GetRawText(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            _ => element.GetRawText(),
+        };
     }
 
     private static string ReadString(JsonElement element, params string[] candidates)
