@@ -9,11 +9,11 @@ namespace CasoC.Services;
 internal sealed class CasoCBootstrapper
 {
     private readonly AIProjectClient _projectClient;
-    private readonly CasoCSettings _settings;
+    private readonly CasoCA2ASettings _settings;
     private readonly AgentReconciler _reconciler;
     private readonly ExternalAgentResolver _externalAgentResolver;
 
-    internal CasoCBootstrapper(AIProjectClient projectClient, CasoCSettings settings)
+    internal CasoCBootstrapper(AIProjectClient projectClient, CasoCA2ASettings settings)
     {
         _projectClient = projectClient;
         _settings = settings;
@@ -23,13 +23,13 @@ internal sealed class CasoCBootstrapper
 
     internal async Task<BootstrapSummary> BootstrapAsync(CancellationToken cancellationToken)
     {
-        await ValidateProjectAccessAsync(cancellationToken);
-        Console.WriteLine("[VALIDATION] Project access validated");
-
         AIProjectDeployment deployment = await ValidateDeploymentAsync(
             _settings.ModelDeploymentName!,
             cancellationToken);
         Console.WriteLine($"[CONFIG] Deployment validated => {deployment.Name}");
+
+        await ValidateProjectAccessAsync(cancellationToken);
+        Console.WriteLine("[VALIDATION] Project access validated");
 
         AgentVersion orderAgent = await _externalAgentResolver.ResolveRequiredAgentVersionAsync(
             _settings.OrderAgentId!,

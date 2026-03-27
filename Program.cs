@@ -52,7 +52,7 @@ internal static class Program
 
     private static async Task<BootstrapSummary> BootstrapAsync(CancellationToken cancellationToken)
     {
-        CasoCSettings settings = LoadSettings();
+        CasoCA2ASettings settings = LoadSettings();
         string endpoint = GetRequiredSetting(settings.ProjectEndpoint, "CasoC:ProjectEndpoint");
         _ = GetRequiredSetting(settings.ModelDeploymentName, "CasoC:ModelDeploymentName");
         _ = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
@@ -80,8 +80,6 @@ internal static class Program
         WriteAgentSummary("PolicyAgent", summary.PolicyAgent.Version);
         WriteAgentSummary("PlannerAgent", summary.PlannerAgent.Version);
         Console.WriteLine(
-            $"[SUMMARY] Planner bindings => OrderAgent via '{summary.OrderBinding.Name}', PolicyAgent via '{summary.PolicyBinding.Name}'");
-        Console.WriteLine(
             $"[SUMMARY] Order A2A connection => name: {summary.OrderBinding.Name}, id: {summary.OrderBinding.Id}, type: {summary.OrderBinding.Type}");
         Console.WriteLine(
             $"[SUMMARY] Policy A2A connection => name: {summary.PolicyBinding.Name}, id: {summary.PolicyBinding.Id}, type: {summary.PolicyBinding.Type}");
@@ -96,21 +94,21 @@ internal static class Program
             $"[SUMMARY] {label} => id: {agentVersion.Id}, name: {agentVersion.Name}, version: {agentVersion.Version}");
     }
 
-    private static CasoCSettings LoadSettings()
+    private static CasoCA2ASettings LoadSettings()
     {
         IConfiguration configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
             .Build();
 
-        CasoCSettings? settings = configuration
-            .GetSection(CasoCSettings.SectionName)
-            .Get<CasoCSettings>();
+        CasoCA2ASettings? settings = configuration
+            .GetSection(CasoCA2ASettings.SectionName)
+            .Get<CasoCA2ASettings>();
 
         if (settings is null)
         {
             throw new InvalidOperationException(
-                $"The '{CasoCSettings.SectionName}' section was not found in appsettings.json.");
+                $"The '{CasoCA2ASettings.SectionName}' section was not found in appsettings.json.");
         }
 
         return settings;

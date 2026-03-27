@@ -1,6 +1,6 @@
 namespace CasoC;
 
-internal sealed class CasoCSettings
+internal sealed class CasoCA2ASettings
 {
     public const string SectionName = "CasoC";
 

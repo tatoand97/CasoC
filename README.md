@@ -1,56 +1,49 @@
 # CasoC
 
-`CasoC` es un repositorio de bootstrap / IaC logico puro para un Caso C A2A real en Microsoft Foundry sobre .NET 10.
+`CasoC` es un repositorio de bootstrap / IaC logico puro para un Caso C A2A real en Azure AI Foundry sobre .NET 8.
 
-El repo valida el proyecto Foundry, valida el deployment del modelo, valida un `OrderAgent` externo existente, crea o reconcilia `PolicyAgent`, valida dos conexiones A2A y crea o reconcilia `PlannerAgent` con dos A2A tools. No consume prompts de negocio, no ejecuta flujo funcional y no expone API HTTP.
+Este repo solo valida y reconcilia recursos. `OrderAgent` es externo y ya existe. `PolicyAgent` y `PlannerAgent` se crean o reconcilian aqui. `PlannerAgent` queda configurado con exactamente dos `A2APreviewTool`: uno hacia `OrderAgent` y otro hacia `PolicyAgent`.
+
+El repo no consume prompts de negocio, no ejecuta runtime funcional, no hace fan-out desde backend y no expone API.
 
 ## Target Architecture
 
-Usuario
+```text
+User
   |
   v
 PlannerAgent
   |- A2A -> OrderAgent
   '- A2A -> PolicyAgent
+```
 
-Y dentro de `OrderAgent`:
+`OrderAgent` puede implementar su propia integracion interna, pero eso queda fuera de este repositorio.
 
-OrderAgent
-  |
-  v
-MCP
-  |
-  v
-APIM
-  |
-  v
-API REST
-
-## Repository Responsibilities
+## Responsibilities
 
 - Validar `CasoC:ProjectEndpoint`
+- Validar el deployment configurado en `CasoC:ModelDeploymentName`
 - Validar acceso al proyecto Foundry
-- Validar `CasoC:ModelDeploymentName`
-- Validar `CasoC:OrderAgentId` como agente externo existente
+- Validar `CasoC:OrderAgentId` como referencia a un `OrderAgent` externo existente
 - Crear o reconciliar `PolicyAgent`
 - Validar `CasoC:OrderA2AConnectionName`
 - Validar `CasoC:PolicyA2AConnectionName`
 - Crear o reconciliar `PlannerAgent` con exactamente dos `A2APreviewTool`
-- Imprimir resumen final de ids, nombres, versiones y conexiones
-- Terminar
+- Imprimir ids, nombres, versiones y conexiones al finalizar
 
 ## Prerequisites
 
-- Un proyecto de Microsoft Foundry accesible por endpoint de proyecto
-- Un model deployment existente en el mismo proyecto
-- Un `OrderAgent` existente en el mismo proyecto, creado por otro repo o proceso
-- Una A2A connection existente para el endpoint de `OrderAgent`
-- Una A2A connection existente para el endpoint de `PolicyAgent`
+- Un Azure AI Foundry project accesible por endpoint de proyecto
+- Un deployment de modelo existente en ese mismo proyecto
+- Un `OrderAgent` existente en ese mismo proyecto, creado por otro repo o proceso
+- Una A2A connection ya creada para `OrderAgent`
 - Credenciales validas para `DefaultAzureCredential`
+
+Antes de completar el bootstrap de `PlannerAgent`, tambien debe existir una A2A connection para `PolicyAgent`. Si esa connection depende de crear primero el agente, ver la secuencia operativa mas abajo.
 
 ## Configuration
 
-Configura `appsettings.json` con esta seccion:
+`appsettings.json` debe contener:
 
 ```json
 {
@@ -77,30 +70,43 @@ Reglas:
 - `PlannerAgentName` es requerido
 - `OrderA2AConnectionName` es requerido
 - `PolicyA2AConnectionName` es requerido
-- `OrderA2ABaseUri` y `PolicyA2ABaseUri` son opcionales y solo se usan cuando la connection no es `RemoteA2A`
+- `OrderA2ABaseUri` y `PolicyA2ABaseUri` son opcionales
+- Si una connection no es `RemoteA2A`, se debe informar su base URI manualmente en el setting correspondiente
 
-## Official A2A Pattern
+## Bootstrap Flow
 
-Este repo sigue el patron oficial A2A de Foundry:
+La aplicacion hace exactamente esto:
 
-- `PlannerAgent` usa A2A tools y no workflow
+1. Carga settings.
+2. Valida el endpoint Foundry.
+3. Valida el deployment configurado.
+4. Valida acceso al proyecto.
+5. Resuelve y valida `OrderAgent` sin crearlo.
+6. Crea o reconcilia `PolicyAgent`.
+7. Resuelve y valida las dos conexiones A2A por nombre.
+8. Crea o reconcilia `PlannerAgent` con dos A2A tools.
+9. Imprime el resumen final y termina.
+
+## Agent Model
+
+- `OrderAgent` sigue siendo externo y solo se valida
+- `PolicyAgent` es un prompt agent normal, sin MCP, sin A2A y sin tools externas
+- `PlannerAgent` es el unico agente orquestador del caso
+- `PlannerAgent` usa A2A tools
+- `PlannerAgent` no usa workflow
 - `PlannerAgent` no usa MCP directo
 - `PlannerAgent` no usa tools tipo `agent`
-- `OrderAgent` sigue siendo externo y solo se valida
-- `PolicyAgent` se crea o reconcilia aqui
-- `PlannerAgent` se crea o reconcilia aqui
-- El consumer del caso debe invocar solo a `PlannerAgent`
-- Las conexiones A2A se crean previamente en Foundry portal y el codigo solo las resuelve por nombre
+- El consumidor del caso debe invocar solamente a `PlannerAgent`
 
-## Operational Note
+## Operational Sequence
 
-Si `PolicyAgent` se crea o actualiza en este repo pero la connection A2A de Policy todavia no existe, el programa aborta claramente antes de reconciliar `PlannerAgent`.
+Si la A2A connection de `PolicyAgent` requiere crear primero el agente y luego registrar manualmente la connection en Foundry, la secuencia correcta es:
 
-Esto permite una secuencia operativa de dos pasos cuando haga falta:
+1. Ejecutar `dotnet run` para crear o reconciliar `PolicyAgent`.
+2. Crear manualmente la A2A connection de `PolicyAgent` en Foundry portal.
+3. Reejecutar `dotnet run` para validar esa connection y reconciliar `PlannerAgent`.
 
-1. Ejecutar bootstrap para crear o reconciliar `PolicyAgent`
-2. Crear manualmente la connection A2A de Policy en Foundry portal
-3. Reejecutar bootstrap para reconciliar `PlannerAgent`
+El programa falla con un mensaje claro si la connection no existe o si falta `PolicyA2ABaseUri` para una connection que no sea `RemoteA2A`.
 
 ## Execution
 
@@ -108,19 +114,24 @@ Esto permite una secuencia operativa de dos pasos cuando haga falta:
 dotnet run
 ```
 
-La ejecucion es solo de bootstrap. Este repo no acepta prompts de negocio y no invoca runtime funcional de `OrderAgent` ni de `PolicyAgent`.
+La ejecucion es solo de bootstrap. Este repo no acepta prompts de negocio, no consume prompts de prueba y no invoca runtime funcional de `OrderAgent` ni de `PolicyAgent`.
 
 ## Expected Console Shape
 
 ```text
 [CONFIG] Endpoint validated => https://<resource>.services.ai.azure.com/api/projects/<project>
-[VALIDATION] Project access validated
 [CONFIG] Deployment validated => <deployment-name>
+[VALIDATION] Project access validated
 [VALIDATION] OrderAgent validated => id: <order-agent-id>, name: <order-agent-name>, version: <order-agent-version>
 [RECONCILE] policy-agent-casec-a2a => created|updated|unchanged
 [VALIDATION] Order A2A connection validated => name: <order-connection>, id: <order-connection-id>, type: <order-connection-type>
 [VALIDATION] Policy A2A connection validated => name: <policy-connection>, id: <policy-connection-id>, type: <policy-connection-type>
 [RECONCILE] planner-agent-casec-a2a => created|updated|unchanged
+[SUMMARY] OrderAgent => id: <order-agent-id>, name: <order-agent-name>, version: <order-agent-version>
+[SUMMARY] PolicyAgent => id: <policy-agent-id>, name: <policy-agent-name>, version: <policy-agent-version>
+[SUMMARY] PlannerAgent => id: <planner-agent-id>, name: <planner-agent-name>, version: <planner-agent-version>
+[SUMMARY] Order A2A connection => name: <order-connection>, id: <order-connection-id>, type: <order-connection-type>
+[SUMMARY] Policy A2A connection => name: <policy-connection>, id: <policy-connection-id>, type: <policy-connection-type>
 [SUMMARY] PlannerAgent bootstrap for A2A completed
 ```
 
@@ -129,8 +140,7 @@ La ejecucion es solo de bootstrap. Este repo no acepta prompts de negocio y no i
 - Workflow orchestration
 - Backend fan-out
 - Direct MCP from `PlannerAgent`
-- Direct runtime invocation of `OrderAgent` desde este repo
-- Direct runtime invocation of `PolicyAgent` desde este repo
+- Tools tipo `agent`
+- Runtime funcional de negocio
 - Prompt consumption
-- Business-flow execution
-- HTTP API exposure
+- API HTTP
