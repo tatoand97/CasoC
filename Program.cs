@@ -1,5 +1,6 @@
 using Azure;
 using Azure.AI.Projects;
+using Azure.AI.Projects.Agents;
 using Azure.Identity;
 using CasoC.Services;
 using Microsoft.Extensions.Configuration;
@@ -51,9 +52,11 @@ internal static class Program
 
     private static async Task<BootstrapSummary> BootstrapAsync(CancellationToken cancellationToken)
     {
-        CasoCA2ASettings settings = LoadSettings();
+        CasoCSettings settings = LoadSettings();
         string endpoint = GetRequiredSetting(settings.ProjectEndpoint, "CasoC:ProjectEndpoint");
         _ = GetRequiredSetting(settings.ModelDeploymentName, "CasoC:ModelDeploymentName");
+        _ = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
+        _ = GetRequiredSetting(settings.PolicyAgentName, "CasoC:PolicyAgentName");
         _ = GetRequiredSetting(settings.PlannerAgentName, "CasoC:PlannerAgentName");
         _ = GetRequiredSetting(settings.OrderA2AConnectionName, "CasoC:OrderA2AConnectionName");
         _ = GetRequiredSetting(settings.PolicyA2AConnectionName, "CasoC:PolicyA2AConnectionName");
@@ -62,12 +65,8 @@ internal static class Program
         Console.WriteLine($"[CONFIG] Endpoint validated => {endpoint}");
 
         AIProjectClient projectClient = CreateProjectClient(endpoint);
-        CasoCA2ABootstrapper bootstrapper = new(projectClient, settings);
-        BootstrapSummary summary = await bootstrapper.BootstrapAsync(cancellationToken);
-
-        WriteReconciliationResult(summary.PlannerAgent);
-
-        return summary;
+        CasoCBootstrapper bootstrapper = new(projectClient, settings);
+        return await bootstrapper.BootstrapAsync(cancellationToken);
     }
 
     private static AIProjectClient CreateProjectClient(string endpoint)
@@ -75,40 +74,43 @@ internal static class Program
         return new AIProjectClient(new Uri(endpoint), new DefaultAzureCredential());
     }
 
-    private static void WriteReconciliationResult(ReconcileResult result)
-    {
-        Console.WriteLine(
-            $"[RECONCILE] {result.Version.Name} => {result.ReconciliationStatus} (id: {result.Version.Id}, version: {result.Version.Version})");
-    }
-
     private static void WriteBootstrapSummary(BootstrapSummary summary)
     {
+        WriteAgentSummary("OrderAgent", summary.OrderAgent);
+        WriteAgentSummary("PolicyAgent", summary.PolicyAgent.Version);
+        WriteAgentSummary("PlannerAgent", summary.PlannerAgent.Version);
         Console.WriteLine(
-            $"[SUMMARY] PlannerAgent => name: {summary.PlannerAgent.Version.Name}, id: {summary.PlannerAgent.Version.Id}, version: {summary.PlannerAgent.Version.Version}");
+            $"[SUMMARY] Planner bindings => OrderAgent via '{summary.OrderBinding.Name}', PolicyAgent via '{summary.PolicyBinding.Name}'");
         Console.WriteLine(
             $"[SUMMARY] Order A2A connection => name: {summary.OrderBinding.Name}, id: {summary.OrderBinding.Id}, type: {summary.OrderBinding.Type}");
         Console.WriteLine(
             $"[SUMMARY] Policy A2A connection => name: {summary.PolicyBinding.Name}, id: {summary.PolicyBinding.Id}, type: {summary.PolicyBinding.Type}");
         Console.WriteLine(
-            $"[SUMMARY] Prerequisites validated => project access, model deployment '{summary.ModelDeploymentName}', Order A2A connection, Policy A2A connection");
+            $"[SUMMARY] Model deployment => {summary.ModelDeploymentName}");
         Console.WriteLine("[SUMMARY] PlannerAgent bootstrap for A2A completed");
     }
 
-    private static CasoCA2ASettings LoadSettings()
+    private static void WriteAgentSummary(string label, AgentVersion agentVersion)
+    {
+        Console.WriteLine(
+            $"[SUMMARY] {label} => id: {agentVersion.Id}, name: {agentVersion.Name}, version: {agentVersion.Version}");
+    }
+
+    private static CasoCSettings LoadSettings()
     {
         IConfiguration configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
             .Build();
 
-        CasoCA2ASettings? settings = configuration
-            .GetSection(CasoCA2ASettings.SectionName)
-            .Get<CasoCA2ASettings>();
+        CasoCSettings? settings = configuration
+            .GetSection(CasoCSettings.SectionName)
+            .Get<CasoCSettings>();
 
         if (settings is null)
         {
             throw new InvalidOperationException(
-                $"The '{CasoCA2ASettings.SectionName}' section was not found in appsettings.json.");
+                $"The '{CasoCSettings.SectionName}' section was not found in appsettings.json.");
         }
 
         return settings;
@@ -156,7 +158,7 @@ internal static class Program
 
         if (ex.Status == 404)
         {
-            Console.Error.WriteLine("Hint: resource not found. Verify 'CasoC:ModelDeploymentName', 'CasoC:OrderA2AConnectionName', and 'CasoC:PolicyA2AConnectionName' in the same Foundry project.");
+            Console.Error.WriteLine("Hint: resource not found. Verify 'CasoC:ModelDeploymentName', 'CasoC:OrderAgentId', 'CasoC:OrderA2AConnectionName', and 'CasoC:PolicyA2AConnectionName' in the same Foundry project.");
         }
 
         if (ex.GetRawResponse() is { } rawResponse)

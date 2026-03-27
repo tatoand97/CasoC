@@ -6,17 +6,19 @@ using System.ClientModel;
 
 namespace CasoC.Services;
 
-internal sealed class CasoCA2ABootstrapper
+internal sealed class CasoCBootstrapper
 {
     private readonly AIProjectClient _projectClient;
-    private readonly CasoCA2ASettings _settings;
+    private readonly CasoCSettings _settings;
     private readonly AgentReconciler _reconciler;
+    private readonly ExternalAgentResolver _externalAgentResolver;
 
-    internal CasoCA2ABootstrapper(AIProjectClient projectClient, CasoCA2ASettings settings)
+    internal CasoCBootstrapper(AIProjectClient projectClient, CasoCSettings settings)
     {
         _projectClient = projectClient;
         _settings = settings;
         _reconciler = new AgentReconciler(projectClient);
+        _externalAgentResolver = new ExternalAgentResolver(projectClient);
     }
 
     internal async Task<BootstrapSummary> BootstrapAsync(CancellationToken cancellationToken)
@@ -27,13 +29,27 @@ internal sealed class CasoCA2ABootstrapper
         AIProjectDeployment deployment = await ValidateDeploymentAsync(
             _settings.ModelDeploymentName!,
             cancellationToken);
-        Console.WriteLine($"[VALIDATION] Model deployment validated => {deployment.Name}");
+        Console.WriteLine($"[CONFIG] Deployment validated => {deployment.Name}");
+
+        AgentVersion orderAgent = await _externalAgentResolver.ResolveRequiredAgentVersionAsync(
+            _settings.OrderAgentId!,
+            cancellationToken);
+        Console.WriteLine(
+            $"[VALIDATION] OrderAgent validated => id: {orderAgent.Id}, name: {orderAgent.Name}, version: {orderAgent.Version}");
+
+        ReconcileResult policyResult = await _reconciler.ReconcileAsync(
+            _settings.PolicyAgentName!,
+            PolicyAgentFactory.Build(deployment.Name),
+            cancellationToken);
+        Console.WriteLine(
+            $"[RECONCILE] {policyResult.Version.Name} => {policyResult.ReconciliationStatus} (id: {policyResult.Version.Id}, version: {policyResult.Version.Version})");
 
         A2AToolBinding orderBinding = ResolveA2AConnection(
             _settings.OrderA2AConnectionName!,
             _settings.OrderA2ABaseUri,
             "CasoC:OrderA2AConnectionName",
-            "CasoC:OrderA2ABaseUri");
+            "CasoC:OrderA2ABaseUri",
+            "Create the Order A2A connection in Foundry portal before rerunning bootstrap.");
         Console.WriteLine(
             $"[VALIDATION] Order A2A connection validated => name: {orderBinding.Name}, id: {orderBinding.Id}, type: {orderBinding.Type}");
 
@@ -41,21 +57,26 @@ internal sealed class CasoCA2ABootstrapper
             _settings.PolicyA2AConnectionName!,
             _settings.PolicyA2ABaseUri,
             "CasoC:PolicyA2AConnectionName",
-            "CasoC:PolicyA2ABaseUri");
+            "CasoC:PolicyA2ABaseUri",
+            "Create the Policy A2A connection in Foundry portal for the reconciled PolicyAgent, then rerun bootstrap. " +
+            "If needed, use the two-step sequence: 1. create PolicyAgent, 2. create the Policy A2A connection, 3. rerun bootstrap.");
         Console.WriteLine(
             $"[VALIDATION] Policy A2A connection validated => name: {policyBinding.Name}, id: {policyBinding.Id}, type: {policyBinding.Type}");
 
-        PromptAgentDefinition plannerDefinition = PlannerAgentFactory.Build(
-            deployment.Name,
-            orderBinding,
-            policyBinding);
-
         ReconcileResult plannerResult = await _reconciler.ReconcileAsync(
             _settings.PlannerAgentName!,
-            plannerDefinition,
+            PlannerAgentFactory.Build(deployment.Name, orderBinding, policyBinding),
             cancellationToken);
+        Console.WriteLine(
+            $"[RECONCILE] {plannerResult.Version.Name} => {plannerResult.ReconciliationStatus} (id: {plannerResult.Version.Id}, version: {plannerResult.Version.Version})");
 
-        return new BootstrapSummary(deployment.Name, orderBinding, policyBinding, plannerResult);
+        return new BootstrapSummary(
+            deployment.Name,
+            orderAgent,
+            policyResult,
+            plannerResult,
+            orderBinding,
+            policyBinding);
     }
 
     private async Task ValidateProjectAccessAsync(CancellationToken cancellationToken)
@@ -94,7 +115,8 @@ internal sealed class CasoCA2ABootstrapper
         string connectionName,
         string? configuredBaseUri,
         string connectionSettingKey,
-        string baseUriSettingKey)
+        string baseUriSettingKey,
+        string missingConnectionGuidance)
     {
         AIProjectConnection connection;
 
@@ -104,15 +126,11 @@ internal sealed class CasoCA2ABootstrapper
         }
         catch (ClientResultException ex) when (ex.Status == 404)
         {
-            throw new InvalidOperationException(
-                $"The required A2A connection '{connectionName}' from '{connectionSettingKey}' was not found in the Foundry project.",
-                ex);
+            throw BuildMissingConnectionException(connectionName, connectionSettingKey, missingConnectionGuidance, ex);
         }
         catch (RequestFailedException ex) when (ex.Status == 404)
         {
-            throw new InvalidOperationException(
-                $"The required A2A connection '{connectionName}' from '{connectionSettingKey}' was not found in the Foundry project.",
-                ex);
+            throw BuildMissingConnectionException(connectionName, connectionSettingKey, missingConnectionGuidance, ex);
         }
 
         string connectionType = connection.Type.ToString();
@@ -136,6 +154,18 @@ internal sealed class CasoCA2ABootstrapper
             connection.Id,
             connectionType,
             baseUri);
+    }
+
+    private static InvalidOperationException BuildMissingConnectionException(
+        string connectionName,
+        string connectionSettingKey,
+        string missingConnectionGuidance,
+        Exception innerException)
+    {
+        return new InvalidOperationException(
+            $"The required A2A connection '{connectionName}' from '{connectionSettingKey}' was not found in the Foundry project. " +
+            missingConnectionGuidance,
+            innerException);
     }
 
     private static Uri GetRequiredAbsoluteUri(
@@ -167,6 +197,8 @@ internal sealed class CasoCA2ABootstrapper
 
 internal sealed record BootstrapSummary(
     string ModelDeploymentName,
+    AgentVersion OrderAgent,
+    ReconcileResult PolicyAgent,
+    ReconcileResult PlannerAgent,
     A2AToolBinding OrderBinding,
-    A2AToolBinding PolicyBinding,
-    ReconcileResult PlannerAgent);
+    A2AToolBinding PolicyBinding);

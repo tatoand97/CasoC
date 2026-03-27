@@ -1,12 +1,16 @@
 namespace CasoC;
 
-internal sealed class CasoCA2ASettings
+internal sealed class CasoCSettings
 {
     public const string SectionName = "CasoC";
 
     public string? ProjectEndpoint { get; init; }
 
     public string? ModelDeploymentName { get; init; }
+
+    public string? OrderAgentId { get; init; }
+
+    public string? PolicyAgentName { get; init; }
 
     public string? PlannerAgentName { get; init; }
 
