@@ -1,5 +1,5 @@
 ﻿using Azure.AI.Projects;
-using Azure.AI.Projects.OpenAI;
+using Azure.AI.Projects.Agents;
 using System.ClientModel;
 using System.Text.Json;
 
@@ -27,6 +27,7 @@ internal sealed class AgentReconciler
             ClientResult<AgentVersion> created = await _projectClient.Agents.CreateAgentVersionAsync(
                 agentName,
                 new AgentVersionCreationOptions(desiredDefinition),
+                foundryFeatures: null,
                 cancellationToken);
 
             return new ReconcileResult(created.Value, "created", desiredSignature);
@@ -41,6 +42,7 @@ internal sealed class AgentReconciler
         ClientResult<AgentVersion> updated = await _projectClient.Agents.CreateAgentVersionAsync(
             agentName,
             new AgentVersionCreationOptions(desiredDefinition),
+            foundryFeatures: null,
             cancellationToken);
 
         return new ReconcileResult(updated.Value, "updated", desiredSignature);

@@ -1,8 +1,6 @@
 using Azure;
 using Azure.AI.Projects;
-using Azure.AI.Projects.OpenAI;
 using Azure.Identity;
-using CasoC.Agents;
 using CasoC.Services;
 using Microsoft.Extensions.Configuration;
 using System.ClientModel;
@@ -28,7 +26,7 @@ internal static class Program
         }
         catch (OperationCanceledException) when (cts.IsCancellationRequested)
         {
-            Console.Error.WriteLine("[OperationCanceledException] Operacion cancelada por el usuario.");
+            Console.Error.WriteLine("[OperationCanceledException] Operation cancelled by the user.");
             return 1;
         }
         catch (RequestFailedException ex)
@@ -53,44 +51,28 @@ internal static class Program
 
     private static async Task<BootstrapSummary> BootstrapAsync(CancellationToken cancellationToken)
     {
-        CasoCSettings settings = LoadSettings();
-        string endpoint = GetRequiredSetting(settings.AzureOpenAiEndpoint, "CasoC:AzureOpenAiEndpoint");
-        string deploymentName = GetRequiredSetting(settings.AzureOpenAiDeployment, "CasoC:AzureOpenAiDeployment");
-        string orderAgentId = GetRequiredSetting(settings.OrderAgentId, "CasoC:OrderAgentId");
+        CasoCA2ASettings settings = LoadSettings();
+        string endpoint = GetRequiredSetting(settings.ProjectEndpoint, "CasoC:ProjectEndpoint");
+        _ = GetRequiredSetting(settings.ModelDeploymentName, "CasoC:ModelDeploymentName");
+        _ = GetRequiredSetting(settings.PlannerAgentName, "CasoC:PlannerAgentName");
+        _ = GetRequiredSetting(settings.OrderA2AConnectionName, "CasoC:OrderA2AConnectionName");
+        _ = GetRequiredSetting(settings.PolicyA2AConnectionName, "CasoC:PolicyA2AConnectionName");
 
         ValidateProjectEndpoint(endpoint);
+        Console.WriteLine($"[CONFIG] Endpoint validated => {endpoint}");
 
         AIProjectClient projectClient = CreateProjectClient(endpoint);
-        await ValidateProjectAccessAsync(projectClient, cancellationToken);
-        Console.WriteLine($"[CONFIG] Endpoint validado => {endpoint}");
+        CasoCA2ABootstrapper bootstrapper = new(projectClient, settings);
+        BootstrapSummary summary = await bootstrapper.BootstrapAsync(cancellationToken);
 
-        AIProjectDeployment deployment = await ValidateDeploymentAsync(projectClient, deploymentName, cancellationToken);
-        Console.WriteLine($"[CONFIG] Deployment validado => {deployment.Name}");
+        WriteReconciliationResult(summary.PlannerAgent);
 
-        ValidatedAgentBinding orderAgent = await ValidateOrderAgentBindingAsync(projectClient, orderAgentId, cancellationToken);
-        Console.WriteLine(
-            $"[VALIDATION] OrderAgentId validado => {orderAgentId} -> {orderAgent.Name} (id: {orderAgent.Id}, version: {orderAgent.Version})");
-
-        AgentReconciler reconciler = new(projectClient);
-
-        ReconcileResult policyResult = await reconciler.ReconcileAsync(
-            PolicyAgentFactory.AgentName,
-            PolicyAgentFactory.Build(deployment.Name),
-            cancellationToken);
-        WriteReconciliationResult(policyResult);
-
-        ReconcileResult plannerResult = await reconciler.ReconcileAsync(
-            PlannerAgentFactory.AgentName,
-            PlannerAgentFactory.Build(deployment.Name),
-            cancellationToken);
-        WriteReconciliationResult(plannerResult);
-
-        return new BootstrapSummary(orderAgent, policyResult, plannerResult);
+        return summary;
     }
 
     private static AIProjectClient CreateProjectClient(string endpoint)
     {
-        return new AIProjectClient(new Uri(endpoint), new AzureCliCredential());
+        return new AIProjectClient(new Uri(endpoint), new DefaultAzureCredential());
     }
 
     private static void WriteReconciliationResult(ReconcileResult result)
@@ -102,100 +84,31 @@ internal static class Program
     private static void WriteBootstrapSummary(BootstrapSummary summary)
     {
         Console.WriteLine(
-            $"[SUMMARY] Bindings => OrderAgent={summary.OrderAgent.Name} (id: {summary.OrderAgent.Id}, version: {summary.OrderAgent.Version}); " +
-            $"PolicyAgent={summary.PolicyAgent.Version.Name} (id: {summary.PolicyAgent.Version.Id}, version: {summary.PolicyAgent.Version.Version}); " +
-            $"PlannerAgent={summary.PlannerAgent.Version.Name} (id: {summary.PlannerAgent.Version.Id}, version: {summary.PlannerAgent.Version.Version})");
-        Console.WriteLine("[SUMMARY] Foundry bootstrap completed");
+            $"[SUMMARY] PlannerAgent => name: {summary.PlannerAgent.Version.Name}, id: {summary.PlannerAgent.Version.Id}, version: {summary.PlannerAgent.Version.Version}");
+        Console.WriteLine(
+            $"[SUMMARY] Order A2A connection => name: {summary.OrderBinding.Name}, id: {summary.OrderBinding.Id}, type: {summary.OrderBinding.Type}");
+        Console.WriteLine(
+            $"[SUMMARY] Policy A2A connection => name: {summary.PolicyBinding.Name}, id: {summary.PolicyBinding.Id}, type: {summary.PolicyBinding.Type}");
+        Console.WriteLine(
+            $"[SUMMARY] Prerequisites validated => project access, model deployment '{summary.ModelDeploymentName}', Order A2A connection, Policy A2A connection");
+        Console.WriteLine("[SUMMARY] PlannerAgent bootstrap for A2A completed");
     }
 
-    private static async Task<AIProjectDeployment> ValidateDeploymentAsync(
-        AIProjectClient projectClient,
-        string deploymentName,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await projectClient.Deployments.GetDeploymentAsync(deploymentName, cancellationToken);
-        }
-        catch (ClientResultException ex) when (ex.Status == 404)
-        {
-            throw new InvalidOperationException(
-                $"La configuracion 'CasoC:AzureOpenAiDeployment' con valor '{deploymentName}' no existe en el proyecto o no es accesible.",
-                ex);
-        }
-    }
-
-    private static async Task<AgentRecord> ValidateOrderAgentIdStrictAsync(
-        AIProjectClient projectClient,
-        string orderAgentId,
-        CancellationToken cancellationToken)
-    {
-        try
-        {
-            return await projectClient.Agents.GetAgentAsync(orderAgentId, cancellationToken);
-        }
-        catch (ClientResultException ex) when (ex.Status == 404)
-        {
-            throw new InvalidOperationException(
-                $"La configuracion 'CasoC:OrderAgentId' con valor '{orderAgentId}' no existe en el proyecto o no es accesible.",
-                ex);
-        }
-    }
-
-    private static async Task<ValidatedAgentBinding> ValidateOrderAgentBindingAsync(
-        AIProjectClient projectClient,
-        string orderAgentId,
-        CancellationToken cancellationToken)
-    {
-        AgentRecord orderAgent = await ValidateOrderAgentIdStrictAsync(projectClient, orderAgentId, cancellationToken);
-        AgentVersion orderAgentVersion = await ResolveLatestAgentVersionAsync(projectClient, orderAgent.Name, cancellationToken);
-
-        return new ValidatedAgentBinding(orderAgent.Name, orderAgent.Id, orderAgentVersion.Version);
-    }
-
-    private static async Task ValidateProjectAccessAsync(
-        AIProjectClient projectClient,
-        CancellationToken cancellationToken)
-    {
-        await foreach (AgentRecord _ in projectClient.Agents.GetAgentsAsync(limit: 1, cancellationToken: cancellationToken))
-        {
-            break;
-        }
-    }
-
-    private static async Task<AgentVersion> ResolveLatestAgentVersionAsync(
-        AIProjectClient projectClient,
-        string agentName,
-        CancellationToken cancellationToken)
-    {
-        await foreach (AgentVersion version in projectClient.Agents.GetAgentVersionsAsync(
-                           agentName: agentName,
-                           limit: 1,
-                           order: AgentListOrder.Descending,
-                           cancellationToken: cancellationToken))
-        {
-            return version;
-        }
-
-        throw new InvalidOperationException(
-            $"No se encontro ninguna version para el agente '{agentName}'.");
-    }
-
-    private static CasoCSettings LoadSettings()
+    private static CasoCA2ASettings LoadSettings()
     {
         IConfiguration configuration = new ConfigurationBuilder()
             .SetBasePath(AppContext.BaseDirectory)
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
             .Build();
 
-        CasoCSettings? settings = configuration
-            .GetSection(CasoCSettings.SectionName)
-            .Get<CasoCSettings>();
+        CasoCA2ASettings? settings = configuration
+            .GetSection(CasoCA2ASettings.SectionName)
+            .Get<CasoCA2ASettings>();
 
         if (settings is null)
         {
             throw new InvalidOperationException(
-                $"No se encontro la seccion '{CasoCSettings.SectionName}' en appsettings.json.");
+                $"The '{CasoCA2ASettings.SectionName}' section was not found in appsettings.json.");
         }
 
         return settings;
@@ -206,7 +119,7 @@ internal static class Program
         if (string.IsNullOrWhiteSpace(value))
         {
             throw new InvalidOperationException(
-                $"La clave requerida '{key}' no esta configurada en appsettings.json.");
+                $"The required setting '{key}' is not configured in appsettings.json.");
         }
 
         return value;
@@ -218,7 +131,7 @@ internal static class Program
             !endpoint.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
-                "La clave 'CasoC:AzureOpenAiEndpoint' debe ser un endpoint de proyecto Azure AI Foundry, por ejemplo: " +
+                "The setting 'CasoC:ProjectEndpoint' must be a valid Azure AI Foundry project endpoint, for example: " +
                 "https://<resource>.services.ai.azure.com/api/projects/<project>.");
         }
     }
@@ -228,7 +141,7 @@ internal static class Program
         if (message.Contains("api/projects", StringComparison.OrdinalIgnoreCase) ||
             message.Contains("endpoint", StringComparison.OrdinalIgnoreCase))
         {
-            Console.Error.WriteLine("Hint: configura 'CasoC:AzureOpenAiEndpoint' con un endpoint de proyecto Foundry: https://<resource>.services.ai.azure.com/api/projects/<project>");
+            Console.Error.WriteLine("Hint: configure 'CasoC:ProjectEndpoint' with a Foundry project endpoint: https://<resource>.services.ai.azure.com/api/projects/<project>");
         }
     }
 
@@ -243,7 +156,7 @@ internal static class Program
 
         if (ex.Status == 404)
         {
-            Console.Error.WriteLine("Hint: resource not found. Verify 'CasoC:AzureOpenAiDeployment' and 'CasoC:OrderAgentId' in the same Foundry project.");
+            Console.Error.WriteLine("Hint: resource not found. Verify 'CasoC:ModelDeploymentName', 'CasoC:OrderA2AConnectionName', and 'CasoC:PolicyA2AConnectionName' in the same Foundry project.");
         }
 
         if (ex.GetRawResponse() is { } rawResponse)
@@ -260,10 +173,3 @@ internal static class Program
         }
     }
 }
-
-internal sealed record BootstrapSummary(
-    ValidatedAgentBinding OrderAgent,
-    ReconcileResult PolicyAgent,
-    ReconcileResult PlannerAgent);
-
-internal sealed record ValidatedAgentBinding(string Name, string Id, string Version);

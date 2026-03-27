@@ -1,88 +1,105 @@
 # CasoC
 
-`CasoC` es un repositorio de bootstrap / logical IaC para Azure AI Foundry en .NET 8.
+`CasoC` es un repositorio de bootstrap / IaC logico puro para un Caso C A2A real en Microsoft Foundry sobre .NET 8.
 
-Su unica responsabilidad es preparar y reconciliar agentes dentro de un proyecto Foundry. Este repo no consume agentes, no ejecuta prompts y no orquesta flujo de negocio. El consumo y la orquestacion viven fuera de este repositorio, en otro repo o servicio.
+Su responsabilidad es validar el proyecto Foundry, validar el deployment del modelo, validar las conexiones A2A requeridas y crear o reconciliar un unico `PlannerAgent`. Este repo no consume prompts de negocio, no hace fan-out desde backend y no ejecuta el caso en runtime.
 
-## Scope
+## Architecture
 
-- Validar `CasoC:AzureOpenAiEndpoint`
-- Validar acceso al proyecto Foundry
-- Validar `CasoC:AzureOpenAiDeployment`
-- Validar el agente externo configurado en `CasoC:OrderAgentId`
-- Reconciliar `policy-agent-casec`
-- Reconciliar `planner-agent-casec-orchestrated`
-- Imprimir resumen final de bindings, ids y versiones
-- Terminar con codigo `0` si todo sale bien
+- `PlannerAgent` es el unico punto de entrada del caso.
+- `PlannerAgent` delega internamente por A2A tool.
+- `PlannerAgent` no llama MCP directamente.
+- `OrderAgent` resuelve la parte tecnica de ordenes.
+- `PolicyAgent` transforma o formatea la respuesta final.
+- La app consumidora solo debe invocar a `PlannerAgent`.
 
-## Agentes
+## What This Repo Does
 
-- `OrderAgent` es externo a este repo. `CasoC` solo valida que exista y pueda ser referenciado.
-- `PolicyAgent` se crea o actualiza por reconciliacion.
-- `PlannerAgent` se crea o actualiza por reconciliacion.
+- Valida `CasoC:ProjectEndpoint`
+- Valida acceso al proyecto Foundry
+- Valida `CasoC:ModelDeploymentName`
+- Resuelve y valida `CasoC:OrderA2AConnectionName`
+- Resuelve y valida `CasoC:PolicyA2AConnectionName`
+- Exige `OrderA2ABaseUri` o `PolicyA2ABaseUri` cuando la conexion no es `RemoteA2A`
+- Reconcilia unicamente `PlannerAgent`
+- Imprime resumen final de bindings y prerequisitos
+- Termina
 
-## Rol del repositorio
+## Prerequisites
 
-- Prepara el proyecto Foundry para que otros consumidores puedan enlazar los agentes esperados.
-- Valida que `OrderAgentId` apunte a un agente externo existente.
-- Reconciliacion de `policy-agent-casec` y `planner-agent-casec-orchestrated`.
-- Termina despues del bootstrap; no existe fase de ejecucion de negocio en este repo.
+- Un proyecto de Microsoft Foundry accesible por endpoint de proyecto
+- Un model deployment existente en el mismo proyecto
+- Una conexion A2A para el endpoint de Order ya creada en Foundry
+- Una conexion A2A para el endpoint de Policy ya creada en Foundry
+- Credenciales validas para `DefaultAzureCredential`
 
-## Lo que este repo no hace
+## Configuration
 
-- No ejecuta el flujo `OrderAgent -> PolicyAgent -> PlannerAgent`
-- No consume ni invoca agentes como runtime
-- No ejecuta prompts de prueba
-- No hace polling de respuestas
-- No imprime respuestas de negocio
-- No expone API HTTP
-- No actua como consola de consumo
-- No contiene el servicio o repo que consume/orquesta estos agentes
-
-## Configuracion
-
-Configura `appsettings.json` en la raiz del proyecto:
+Configura `appsettings.json` con esta seccion:
 
 ```json
 {
   "CasoC": {
-    "AzureOpenAiEndpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
-    "AzureOpenAiDeployment": "<deployment-name>",
-    "OrderAgentId": "<existing-order-agent-id>"
+    "ProjectEndpoint": "https://<resource>.services.ai.azure.com/api/projects/<project>",
+    "ModelDeploymentName": "<deployment-name>",
+    "PlannerAgentName": "planner-agent-casec-a2a",
+    "OrderA2AConnectionName": "<order-a2a-connection-name>",
+    "PolicyA2AConnectionName": "<policy-a2a-connection-name>",
+    "OrderA2ABaseUri": "",
+    "PolicyA2ABaseUri": ""
   }
 }
 ```
 
-## Ejecucion
+Reglas:
+
+- `ProjectEndpoint` es requerido
+- `ModelDeploymentName` es requerido
+- `PlannerAgentName` es requerido
+- `OrderA2AConnectionName` es requerido
+- `PolicyA2AConnectionName` es requerido
+- `OrderA2ABaseUri` y `PolicyA2ABaseUri` son opcionales y solo se usan cuando la conexion no es `RemoteA2A`
+
+## Official A2A Pattern
+
+Este repo sigue el patron oficial A2A de Foundry:
+
+- La conexion A2A ya debe existir en el proyecto Foundry
+- El codigo resuelve la conexion por nombre con `projectClient.Connections.GetConnection(...)`
+- `PlannerAgent` usa `A2APreviewTool`
+- No se usan workflows
+- No se usan tools tipo `agent`
+- No se agrega MCP directo al `PlannerAgent`
+
+## Execution
 
 ```powershell
 dotnet run
 ```
 
-La ejecucion hace bootstrap del proyecto Foundry y termina. No existe una fase posterior de consumo.
+La ejecucion hace bootstrap del proyecto Foundry, imprime el resumen y termina. No existe fase de consumo funcional dentro de este repo.
 
-## Salida esperada
+## Expected Output
 
 ```text
-[CONFIG] Endpoint validado => https://<resource>.services.ai.azure.com/api/projects/<project>
-[CONFIG] Deployment validado => gpt-5.1-chat
-[VALIDATION] OrderAgentId validado => OrderAgent -> OrderAgent (id: agent-id, version: 3)
-[RECONCILE] policy-agent-casec => unchanged (id: policy-agent-casec:3, version: 3)
-[RECONCILE] planner-agent-casec-orchestrated => created (id: planner-agent-casec-orchestrated:1, version: 1)
-[SUMMARY] Bindings => OrderAgent=OrderAgent (id: agent-id, version: 3); PolicyAgent=policy-agent-casec (id: policy-agent-casec:3, version: 3); PlannerAgent=planner-agent-casec-orchestrated (id: planner-agent-casec-orchestrated:1, version: 1)
-[SUMMARY] Foundry bootstrap completed
+[CONFIG] Endpoint validated => https://<resource>.services.ai.azure.com/api/projects/<project>
+[VALIDATION] Project access validated
+[VALIDATION] Model deployment validated => <deployment-name>
+[VALIDATION] Order A2A connection validated => name: <order-connection>, id: <order-id>, type: <order-type>
+[VALIDATION] Policy A2A connection validated => name: <policy-connection>, id: <policy-id>, type: <policy-type>
+[RECONCILE] planner-agent-casec-a2a => created|updated|unchanged (id: <planner-id>, version: <version>)
+[SUMMARY] PlannerAgent => name: planner-agent-casec-a2a, id: <planner-id>, version: <version>
+[SUMMARY] Order A2A connection => name: <order-connection>, id: <order-id>, type: <order-type>
+[SUMMARY] Policy A2A connection => name: <policy-connection>, id: <policy-id>, type: <policy-type>
+[SUMMARY] PlannerAgent bootstrap for A2A completed
 ```
 
-## Out of scope
+## Out of Scope
 
-- runtime consumption
-- order/policy/planner orchestration
-- prompt execution
+- Workflow orchestration
+- Backend fan-out
+- Direct MCP from `PlannerAgent`
+- Direct runtime invocation of `OrderAgent` or `PolicyAgent` desde este repo
+- Prompt execution
+- Functional smoke tests
 - API exposure
-
-## Requisitos
-
-- .NET SDK 8 o superior
-- Endpoint de Azure AI Foundry Project
-- Permisos para listar agentes, leer deployments y crear versiones de agentes
-- Credenciales validas para `AzureCliCredential`
