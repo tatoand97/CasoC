@@ -6,7 +6,7 @@ internal static class PolicyAgentFactory
 {
     private const string PolicyInstructions =
         """
-        You receive structured business data.
+        You receive structured order data.
         Rules:
         1. Write a clear and professional final response for the user.
         2. Do not add new information.

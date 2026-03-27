@@ -61,17 +61,17 @@ internal static class Program
         _ = GetRequiredSetting(settings.OrderA2AConnectionName, "CasoC:OrderA2AConnectionName");
         _ = GetRequiredSetting(settings.PolicyA2AConnectionName, "CasoC:PolicyA2AConnectionName");
 
-        ValidateProjectEndpoint(endpoint);
-        Console.WriteLine($"[CONFIG] Endpoint validated => {endpoint}");
+        Uri endpointUri = ValidateProjectEndpoint(endpoint);
+        Console.WriteLine("[CONFIG] Endpoint validated");
 
-        AIProjectClient projectClient = CreateProjectClient(endpoint);
+        AIProjectClient projectClient = CreateProjectClient(endpointUri);
         CasoCBootstrapper bootstrapper = new(projectClient, settings);
         return await bootstrapper.BootstrapAsync(cancellationToken);
     }
 
-    private static AIProjectClient CreateProjectClient(string endpoint)
+    private static AIProjectClient CreateProjectClient(Uri endpoint)
     {
-        return new AIProjectClient(new Uri(endpoint), new DefaultAzureCredential());
+        return new AIProjectClient(endpoint, new DefaultAzureCredential());
     }
 
     private static void WriteBootstrapSummary(BootstrapSummary summary)
@@ -125,15 +125,31 @@ internal static class Program
         return value;
     }
 
-    private static void ValidateProjectEndpoint(string endpoint)
+    private static Uri ValidateProjectEndpoint(string endpoint)
     {
-        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out _) ||
-            !endpoint.Contains("/api/projects/", StringComparison.OrdinalIgnoreCase))
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out Uri? parsedEndpoint) ||
+            !string.Equals(parsedEndpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+            !parsedEndpoint.Host.EndsWith(".services.ai.azure.com", StringComparison.OrdinalIgnoreCase))
         {
             throw new InvalidOperationException(
                 "The setting 'CasoC:ProjectEndpoint' must be a valid Azure AI Foundry project endpoint, for example: " +
                 "https://<resource>.services.ai.azure.com/api/projects/<project>.");
         }
+
+        string[] pathSegments = parsedEndpoint.AbsolutePath
+            .Split('/', StringSplitOptions.RemoveEmptyEntries);
+
+        if (pathSegments.Length != 3 ||
+            !string.Equals(pathSegments[0], "api", StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(pathSegments[1], "projects", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(pathSegments[2]))
+        {
+            throw new InvalidOperationException(
+                "The setting 'CasoC:ProjectEndpoint' must be a valid Azure AI Foundry project endpoint, for example: " +
+                "https://<resource>.services.ai.azure.com/api/projects/<project>.");
+        }
+
+        return parsedEndpoint;
     }
 
     private static void PrintEndpointHint(string message)

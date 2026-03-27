@@ -26,7 +26,7 @@ internal sealed class CasoCBootstrapper
         AIProjectDeployment deployment = await ValidateDeploymentAsync(
             _settings.ModelDeploymentName!,
             cancellationToken);
-        Console.WriteLine($"[CONFIG] Deployment validated => {deployment.Name}");
+        Console.WriteLine("[CONFIG] Deployment validated");
 
         await ValidateProjectAccessAsync(cancellationToken);
         Console.WriteLine("[VALIDATION] Project access validated");
@@ -34,15 +34,13 @@ internal sealed class CasoCBootstrapper
         AgentVersion orderAgent = await _externalAgentResolver.ResolveRequiredAgentVersionAsync(
             _settings.OrderAgentId!,
             cancellationToken);
-        Console.WriteLine(
-            $"[VALIDATION] OrderAgent validated => id: {orderAgent.Id}, name: {orderAgent.Name}, version: {orderAgent.Version}");
+        Console.WriteLine("[VALIDATION] OrderAgent validated");
 
         ReconcileResult policyResult = await _reconciler.ReconcileAsync(
             _settings.PolicyAgentName!,
             PolicyAgentFactory.Build(deployment.Name),
             cancellationToken);
-        Console.WriteLine(
-            $"[RECONCILE] {policyResult.Version.Name} => {policyResult.ReconciliationStatus} (id: {policyResult.Version.Id}, version: {policyResult.Version.Version})");
+        Console.WriteLine($"[RECONCILE] {policyResult.Version.Name} => {policyResult.ReconciliationStatus}");
 
         A2AToolBinding orderBinding = ResolveA2AConnection(
             "OrderAgent",
@@ -69,8 +67,7 @@ internal sealed class CasoCBootstrapper
             _settings.PlannerAgentName!,
             PlannerAgentFactory.Build(deployment.Name, orderBinding, policyBinding),
             cancellationToken);
-        Console.WriteLine(
-            $"[RECONCILE] {plannerResult.Version.Name} => {plannerResult.ReconciliationStatus} (id: {plannerResult.Version.Id}, version: {plannerResult.Version.Version})");
+        Console.WriteLine($"[RECONCILE] {plannerResult.Version.Name} => {plannerResult.ReconciliationStatus}");
 
         return new BootstrapSummary(
             deployment.Name,
